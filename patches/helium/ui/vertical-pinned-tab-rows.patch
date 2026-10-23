@@ -1,0 +1,260 @@
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -636,8 +636,14 @@
+ inline constexpr char kHeliumLayout[] = "helium.browser.layout";
+ 
+ // A boolean pref set to true if vertical tabs should be on the right side.
+-inline constexpr char kHeliumVerticalRightAligned[] =
+-    "helium.browser.vertical_right_aligned";
++inline constexpr char kHeliumVerticalRightAligned[] =
++    "helium.browser.vertical_right_aligned";
++
++// The maximum number of pinned tabs shown per row in the vertical tab strip.
++// Zero means uncapped: each row fits as many pinned tabs as the available
++// width allows.
++inline constexpr char kHeliumVerticalPinnedTabsPerRow[] =
++    "helium.browser.vertical_pinned_tabs_per_row";
+ 
+ // A boolean pref set to true if zen mode is enabled.
+ inline constexpr char kHeliumZenMode[] = "helium.browser.zen_mode";
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -145,7 +145,9 @@
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, false);
+ 
+-  registry->RegisterBooleanPref(prefs::kHeliumShowProgressBar, true);
++  registry->RegisterBooleanPref(prefs::kHeliumShowProgressBar, true);
++
++  registry->RegisterIntegerPref(prefs::kHeliumVerticalPinnedTabsPerRow, 0);
+ 
+   registry->RegisterBooleanPref(prefs::kHomePageIsNewTabPage, true,
+                                 pref_registration_flags);
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -228,8 +228,10 @@
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumMinimalLocationBar] =
+       settings_api::PrefType::kBoolean;
+-  (*s_allowlist)[::prefs::kHeliumShowProgressBar] =
+-      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumShowProgressBar] =
++      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumVerticalPinnedTabsPerRow] =
++      settings_api::PrefType::kNumber;
+   (*s_allowlist)[::prefs::kHeliumZenMode] = settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumZenModeSidebarPinned] =
+       settings_api::PrefType::kBoolean;
+--- a/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
++++ b/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
+@@ -4,11 +4,15 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
+ 
+-#include "base/i18n/rtl.h"
+-#include "chrome/browser/ui/layout_constants.h"
+-#include "chrome/browser/ui/tabs/features.h"
+-#include "chrome/browser/ui/tabs/tab_style.h"
+-#include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
++#include "base/i18n/rtl.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/tabs/features.h"
++#include "chrome/browser/ui/tabs/tab_style.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
+ #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+@@ -28,9 +28,30 @@
+ #include "ui/views/view_class_properties.h"
+ #include "ui/views/view_utils.h"
+ 
+-namespace {
+-constexpr int kTabPadding = 4;
+-}  // namespace
++namespace {
++constexpr int kTabPadding = 4;
++
++// Reads the user-configured maximum number of pinned tabs per row in the
++// vertical tab strip. Returns 0 when uncapped.
++int GetMaxPinnedTabsPerRow(const TabStripCollectionController* controller) {
++  BrowserView* browser_view =
++      controller ? controller->GetBrowserView() : nullptr;
++  const BrowserWindowInterface* browser_window =
++      browser_view ? browser_view->browser() : nullptr;
++  const Profile* profile =
++      browser_window ? browser_window->GetProfile() : nullptr;
++  const PrefService* prefs = profile ? profile->GetPrefs() : nullptr;
++  if (!prefs || !prefs->HasPref(prefs::kHeliumVerticalPinnedTabsPerRow)) {
++    return 0;
++  }
++  const int max_per_row =
++      prefs->GetInteger(prefs::kHeliumVerticalPinnedTabsPerRow);
++  if (max_per_row <= 0) {
++    return 0;
++  }
++  return max_per_row > 4 ? 4 : max_per_row;
++}
++}  // namespace
+ 
+ PinnedTabContainerView::PinnedTabContainerView(
+     TabCollectionNode* collection_node)
+@@ -422,11 +422,19 @@
+             ? 1
+             : std::min(
+                   children_on_row,
+-                  static_cast<int>(std::floor((available_width - child_width) /
+-                                              (child_width + kTabPadding)) +
+-                                   1));
+-
+-    // Allocate extra space to the tabs.
++                  static_cast<int>(std::floor((available_width - child_width) /
++                                              (child_width + kTabPadding)) +
++                                   1));
++
++    // Cap the number of pinned tabs per row when the user set a maximum.
++    // Zero means uncapped: keep the width-based fit.
++    const int max_per_row = GetMaxPinnedTabsPerRow(
++        collection_node_ ? collection_node_->GetController() : nullptr);
++    if (max_per_row > 0 && children_on_row > max_per_row) {
++      children_on_row = max_per_row;
++    }
++
++    // Allocate extra space to the tabs.
+     available_width -=
+         (children_on_row * child_width) + (kTabPadding * (children_on_row - 1));
+     child_width += std::floor(available_width / children_on_row);
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -218,15 +218,19 @@
+       collection_node_->RegisterWillDestroyCallback(base::BindOnce(
+           &TabStripView::ResetCollectionNode, base::Unretained(this))));
+ 
+-  if (tab_scroll_button_container_) {
+-    if (PrefService* prefs = GetPrefs()) {
+-      pref_change_registrar_.Init(prefs);
+-      pref_change_registrar_.Add(
+-          prefs::kTabScrollButtonsPinnedToTabstrip,
+-          base::BindRepeating(&TabStripView::InvalidateLayout,
+-                              base::Unretained(this), false));
+-    }
+-  }
++  if (PrefService* prefs = GetPrefs()) {
++    pref_change_registrar_.Init(prefs);
++    if (tab_scroll_button_container_) {
++      pref_change_registrar_.Add(
++          prefs::kTabScrollButtonsPinnedToTabstrip,
++          base::BindRepeating(&TabStripView::InvalidateLayout,
++                              base::Unretained(this), false));
++    }
++    pref_change_registrar_.Add(
++        prefs::kHeliumVerticalPinnedTabsPerRow,
++        base::BindRepeating(&TabStripView::InvalidateLayout,
++                            base::Unretained(this), false));
++  }
+ 
+   SetNotifyEnterExitOnChild(true);
+ }
+--- a/chrome/app/settings_strings.grdp
++++ b/chrome/app/settings_strings.grdp
+@@ -258,9 +258,15 @@
+     <message name="IDS_SETTINGS_UI_DENSITY_STANDARD" desc="Standard option in the interface size dropdown, which uses the default compact sizes.">
+       Standard
+     </message>
+-    <message name="IDS_SETTINGS_UI_DENSITY_COMFORTABLE" desc="Comfortable option in the interface size dropdown, which makes tabs, toolbar buttons and the address bar larger.">
+-      Comfortable
+-    </message>
++    <message name="IDS_SETTINGS_UI_DENSITY_COMFORTABLE" desc="Comfortable option in the interface size dropdown, which makes tabs, toolbar buttons and the address bar larger.">
++      Comfortable
++    </message>
++    <message name="IDS_SETTINGS_PINNED_TABS_PER_ROW" desc="Label for the dropdown which controls the maximum number of pinned tabs shown per row in the vertical tab strip.">
++      Maximum pinned tabs per row
++    </message>
++    <message name="IDS_SETTINGS_PINNED_TABS_PER_ROW_UNCAPPED" desc="Option in the pinned tabs per row dropdown which does not limit how many pinned tabs fit on a row.">
++      Uncapped
++    </message>
+     <message name="IDS_SETTINGS_CUSTOMIZE_TOOLBAR" desc="Text of the button which allows you to customize your toolbar.">
+       Customize your toolbar
+     </message>
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -601,7 +601,10 @@
+       {"themes", IDS_SETTINGS_THEMES},
+       {"uiDensity", IDS_SETTINGS_UI_DENSITY},
+       {"uiDensityStandard", IDS_SETTINGS_UI_DENSITY_STANDARD},
+-      {"uiDensityComfortable", IDS_SETTINGS_UI_DENSITY_COMFORTABLE},
++      {"uiDensityComfortable", IDS_SETTINGS_UI_DENSITY_COMFORTABLE},
++      {"pinnedTabsPerRow", IDS_SETTINGS_PINNED_TABS_PER_ROW},
++      {"pinnedTabsPerRowUncapped",
++       IDS_SETTINGS_PINNED_TABS_PER_ROW_UNCAPPED},
+       {"customizeToolbar", IDS_SETTINGS_CUSTOMIZE_TOOLBAR},
+       {"chromeColors", IDS_SETTINGS_CHROME_COLORS},
+       {"colorSchemeMode", IDS_SETTINGS_COLOR_SCHEME_MODE},
+--- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
++++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
+@@ -27,11 +27,21 @@
+       </controlled-radio-button>
+     `)}
+   </settings-radio-group>
+-  <settings-toggle-button class="hr"
+-      ?hidden="${!this.showVerticalSettings_()}"
+-      pref-key="helium.browser.vertical_right_aligned"
+-      label="$i18n{tabStripRightAlign}">
+-  </settings-toggle-button>
++  <settings-toggle-button class="hr"
++      ?hidden="${!this.showVerticalSettings_()}"
++      pref-key="helium.browser.vertical_right_aligned"
++      label="$i18n{tabStripRightAlign}">
++  </settings-toggle-button>
++  <div class="cr-row" ?hidden="${!this.showVerticalSettings_()}">
++    <div class="flex cr-padded-text" aria-hidden="true">
++      $i18n{pinnedTabsPerRow}
++    </div>
++    <settings-dropdown-menu id="pinnedTabsPerRow"
++        label="$i18n{pinnedTabsPerRow}"
++        pref-key="helium.browser.vertical_pinned_tabs_per_row"
++        .menuOptions="${this.pinnedTabsPerRowOptions_}">
++    </settings-dropdown-menu>
++  </div>
+   <settings-toggle-button class="hr" disabled
+       ?hidden="${!this.showVerticalTabsExpandOnHoverSetting_() ||
+                  !this.isExpandOnHoverForcedByZenMode_()}"
+--- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
++++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
+@@ -2,8 +2,10 @@
+ // You can use, redistribute, and/or modify this source code under
+ // the terms of the GPL-3.0 license that can be found in the LICENSE file.
+ 
+-import '../controls/controlled_radio_button.js';
+-import '../controls/settings_radio_group.js';
++import '../controls/controlled_radio_button.js';
++import '../controls/settings_dropdown_menu.js';
++import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
++import '../controls/settings_radio_group.js';
+ import '../controls/settings_toggle_button.js';
+ import '../settings_page/settings_section.js';
+ 
+@@ -92,9 +92,17 @@
+       name: loadTimeData.getString('browserLayoutVertical'),
+       preview: 'vertical',
+     },
+-  ];
+-
+-  protected accessor showVerticalTabsExpandOnHoverEnabled_: boolean =
++  ];
++
++  protected accessor pinnedTabsPerRowOptions_: DropdownMenuOptionList = [
++    {value: 0, name: loadTimeData.getString('pinnedTabsPerRowUncapped')},
++    {value: 1, name: '1'},
++    {value: 2, name: '2'},
++    {value: 3, name: '3'},
++    {value: 4, name: '4'},
++  ];
++
++  protected accessor showVerticalTabsExpandOnHoverEnabled_: boolean =
+       loadTimeData.getBoolean('showVerticalTabsExpandOnHoverEnabled');
+ 
+   override connectedCallback() {
