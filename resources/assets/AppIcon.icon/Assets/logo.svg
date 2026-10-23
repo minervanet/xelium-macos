@@ -72,6 +72,10 @@
 <clipPath id="cFront"><use xlink:href="#front"/></clipPath>
 <clipPath id="cBack"><use xlink:href="#back"/></clipPath>
 </defs>
+  <g id="xelium-base">
+    <use xlink:href="#front" fill="#fff" stroke="#fff" stroke-width="10"/>
+    <use xlink:href="#back" fill="#fff" stroke="#fff" stroke-width="10"/>
+  </g>
   <!-- lower wings -->
   <g filter="url(#fBack)"><use xlink:href="#back" fill="url(#backG)"/></g>
   <g clip-path="url(#cBack)">
