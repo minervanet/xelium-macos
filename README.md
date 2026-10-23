@@ -1,34 +1,42 @@
-# helium-macos
+# xelium
 macOS packaging & development tooling for the
-[Helium Browser](https://github.com/imputnet/helium).
+[Xelium Browser](https://github.com/minervanet/xelium).
+
+Xelium is a custom macOS build/fork focused on tailored features and workflow
+enhancements, evolving the Helium base with its own defaults, patches, and
+release flow.
 
 ## Building and development
 macOS is our primary development platform, so it's the recommended environment
-for developing new Helium features.
+for developing new Xelium features.
 
 [> See docs/building.md](docs/building.md)
 
 ## Contributing
 Before contributing to this repo, please read the guidelines in the main repo's
-[CONTRIBUTING.md](https://github.com/imputnet/helium/blob/main/CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/minervanet/xelium/blob/main/CONTRIBUTING.md).
+
+Found a bug or have a feature request? Please open an issue on the
+[issue tracker](https://github.com/minervanet/xelium/issues).
 
 ## Credits
 
 ### Depot
 Big thank you to [Depot](https://depot.dev/) for sponsoring our runners,
-which handle the macOS builds of Helium. Their high-performance infrastructure
-lets us compile, package, and release new builds of Helium within hours,
+which handle the macOS builds of Xelium. Their high-performance infrastructure
+lets us compile, package, and release new builds of Xelium within hours,
 not days.
 
 ### ungoogled-chromium-macos
 This repo is based on
 [ungoogled-chromium-macos](https://github.com/ungoogled-software/ungoogled-chromium-macos),
-but heavily modified for Helium. Special thanks to everyone behind
-ungoogled-chromium, they made working with Chromium infinitely easier.
+but heavily modified for Xelium (via the Helium base it forks). Special thanks
+to everyone behind ungoogled-chromium, they made working with Chromium
+infinitely easier.
 
 ## License
 All code, patches, modified portions of imported code or patches, and
-any other content that is unique to Helium and not imported from other
+any other content that is unique to Xelium and not imported from other
 repositories is licensed under GPL-3.0. See [LICENSE](LICENSE).
 
 Any content imported from other projects retains its original license (for
