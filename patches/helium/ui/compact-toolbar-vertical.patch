@@ -95,6 +95,24 @@
      case LayoutConstant::kBookmarkBarButtonImageLabelPadding:
        return 6;
      case LayoutConstant::kWebAppMenuButtonSize:
+@@ -68,7 +68,7 @@
+       // stretching the container view.
+       return 16;
+     case LayoutConstant::kLocationBarBubbleFontVerticalPadding:
+-      return 2;
++      return touch_ui ? 3 : (comfortable ? 5 : 2);
+     case LayoutConstant::kLocationBarBubbleAnchorVerticalInset:
+       return 1;
+     case LayoutConstant::kLocationBarChildInteriorPadding:
+@@ -96,7 +96,7 @@
+     case LayoutConstant::kLocationBarTrailingDecorationInnerPadding:
+       return touch_ui ? 3 : 8;
+     case LayoutConstant::kLocationBarHeight:
+-      return touch_ui ? 36 : 28;
++      return touch_ui ? 36 : (comfortable ? 34 : 28);
+     // LINT.IfChange(LocationBarIconSize)
+     case LayoutConstant::kLocationBarIconSize:
+       return touch_ui ? 20 : 16;
 @@ -141,7 +141,7 @@
      case LayoutConstant::kTabstripToolbarOverlap:
        return 0;
