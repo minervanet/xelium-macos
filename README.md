@@ -1,6 +1,9 @@
 # xelium
+<p align="center">
+  <img src="resources/assets/legacy.png" width="128" alt="Xelium app icon">
+</p>
 macOS packaging & development tooling for the
-[Xelium Browser](https://github.com/minervanet/xelium).
+[Xelium Browser](https://github.com/minervanet/xelium-macos).
 
 Xelium is a custom macOS build/fork focused on tailored features and workflow
 enhancements, evolving the Helium base with its own defaults, patches, and
@@ -14,10 +17,10 @@ for developing new Xelium features.
 
 ## Contributing
 Before contributing to this repo, please read the guidelines in the main repo's
-[CONTRIBUTING.md](https://github.com/minervanet/xelium/blob/main/CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/minervanet/xelium-macos/blob/main/CONTRIBUTING.md).
 
 Found a bug or have a feature request? Please open an issue on the
-[issue tracker](https://github.com/minervanet/xelium/issues).
+[issue tracker](https://github.com/minervanet/xelium-macos/issues).
 
 ## Credits
 
