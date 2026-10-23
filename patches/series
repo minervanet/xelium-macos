@@ -24,4 +24,15 @@ helium/macos/lockdown-mode-imageio.patch
 helium/macos/disable-chromium-immersive-fullscreen.patch
 helium/macos/helium-immersive-fullscreen.patch
 helium/macos/fix-history-swiper-lifetime.patch
+helium/core/ui-density-prefs.patch
+helium/settings/ui-density-settings.patch
+helium/ui/layout/address-bar-in-sidebar.patch
+helium/ui/comfortable-vertical-tabs.patch
+helium/ui/rounded-frame-thickness.patch
+helium/ui/sidebar-min-width.patch
+helium/ui/compact-toolbar-vertical.patch
+helium/ui/native-frame-materials-default.patch
+helium/ui/frame-content-edge.patch
+helium/ui/frame-thickness-caption.patch
+helium/ui/sidebar-content-edge.patch
 z-xelium-rebrand.patch

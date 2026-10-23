@@ -1,0 +1,470 @@
+--- a/chrome/browser/ui/views/frame/contents_container_outline.h
++++ b/chrome/browser/ui/views/frame/contents_container_outline.h
+@@ -5,9 +5,12 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_CONTENTS_CONTAINER_OUTLINE_H_
+ #define CHROME_BROWSER_UI_VIEWS_FRAME_CONTENTS_CONTAINER_OUTLINE_H_
+ 
++#include <optional>
++
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "ui/gfx/geometry/insets.h"
+ #include "ui/gfx/geometry/rounded_corners_f.h"
+ #include "ui/views/view.h"
+ #include "ui/views/view_observer.h"
+@@ -39,9 +42,10 @@ class ContentsContainerOutline : public views::View,
+ 
+   void SetCornerRadii(const gfx::RoundedCornersF& radii);
+   void SetOuterCornerRadii(const gfx::RoundedCornersF& radii);
+-  // A non-negative inset moves the outline from the container edge to the
+-  // content edge, so it can hug the rounded content panel.
+-  void SetContentInset(int inset);
++  // Insets move the outline from the container edge to the content edge, so it
++  // can hug the rounded content panel. A side with a zero inset sits flush
++  // against attached chrome and gets no frame band.
++  void SetContentInsets(std::optional<gfx::Insets> insets);
+   void UpdateState(bool is_active, bool is_highlighted);
+   void UpdateState(bool is_highlighted, ui::ColorId stroke_color);
+ 
+@@ -54,7 +58,7 @@ class ContentsContainerOutline : public views::View,
+   void OnViewIsDeleting(views::View* observed_view) override;
+ 
+   bool is_highlighted_ = false;
+-  int content_inset_ = -1;
++  std::optional<gfx::Insets> content_insets_;
+   ui::ColorId stroke_color_ = kColorMultiContentsViewInactiveContentOutline;
+   gfx::RoundedCornersF corner_radii_{kCornerRadius};
+   gfx::RoundedCornersF outer_corner_radii_{kCornerRadius};
+--- a/chrome/browser/ui/views/frame/contents_container_outline.cc
++++ b/chrome/browser/ui/views/frame/contents_container_outline.cc
+@@ -18,6 +18,7 @@
+ #include "ui/color/color_provider.h"
+ #include "ui/compositor/layer.h"
+ #include "ui/gfx/canvas.h"
++#include "ui/gfx/geometry/insets_f.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/geometry/rounded_corners_f.h"
+ #include "ui/views/accessibility/view_accessibility.h"
+@@ -123,11 +124,12 @@ void ContentsContainerOutline::SetOuterCornerRadii(
+   SchedulePaint();
+ }
+ 
+-void ContentsContainerOutline::SetContentInset(int inset) {
+-  if (content_inset_ == inset) {
++void ContentsContainerOutline::SetContentInsets(
++    std::optional<gfx::Insets> insets) {
++  if (content_insets_ == insets) {
+     return;
+   }
+-  content_inset_ = inset;
++  content_insets_ = insets;
+   SchedulePaint();
+ }
+ 
+@@ -167,13 +169,15 @@ void ContentsContainerOutline::OnPaint(gfx::Canvas* canvas) {
+ 
+   gfx::RectF local_bounds(GetLocalBounds());
+   const float half_thickness = stroke_thickness / 2.0f;
+-  const bool at_content_edge = content_inset_ >= 0;
++  const bool at_content_edge = content_insets_.has_value();
+   if (!helium::ShouldUseNativeFrameMaterials(this) && at_content_edge) {
+     // The non-material band is still the outline color, but its inner edge must
+     // follow the rounded content panel instead of exposing a square corner at
+     // larger thicknesses.
+     gfx::RectF inner_bounds(local_bounds);
+-    inner_bounds.Inset(content_inset_);
++    inner_bounds.Inset(gfx::InsetsF::TLBR(
++        content_insets_->top(), content_insets_->left(),
++        content_insets_->bottom(), content_insets_->right()));
+     SkPathBuilder builder(SkPathFillType::kEvenOdd);
+     builder.addPath(GetPath(local_bounds, outer_corner_radii_));
+     builder.addPath(GetPath(inner_bounds, corner_radii_));
+@@ -188,7 +192,11 @@ void ContentsContainerOutline::OnPaint(gfx::Canvas* canvas) {
+   if (at_content_edge) {
+     // Keep the stroke on the outside of the content panel, with its inner edge
+     // exactly on the content boundary.
+-    local_bounds.Inset(content_inset_ - half_thickness);
++    local_bounds.Inset(gfx::InsetsF::TLBR(
++        content_insets_->top() - half_thickness,
++        content_insets_->left() - half_thickness,
++        content_insets_->bottom() - half_thickness,
++        content_insets_->right() - half_thickness));
+   } else {
+     local_bounds.Inset(half_thickness);
+   }
+--- a/chrome/browser/ui/views/frame/contents_container_view.h
++++ b/chrome/browser/ui/views/frame/contents_container_view.h
+@@ -125,6 +125,17 @@ class ContentsContainerView : public views::View,
+                               bool round_bottom_left_window_corner,
+                               bool round_bottom_right_window_corner);
+ 
++  // Marks the sides where an attached vertical tab strip meets the content.
++  // Those sides drop the rounded-frame band so the sidebar can use that space
++  // and the web contents remain flush with the sidebar.
++  void SetVerticalTabStripAttachment(bool leading_attached,
++                                     bool trailing_attached);
++
++  // Marks the top edge as flush with attached top chrome (toolbar/infobar).
++  // The top rounded-frame band is dropped so the top chrome can use that
++  // space and the web contents stay at the same position.
++  void SetTopChromeAttachment(bool top_attached);
++
+   // Returns true when |point|, in this view's coordinates, is in the empty
+   // rounded-frame border around the content panel.
+   bool IsPointInFrameThickness(const gfx::Point& point) const;
+@@ -157,6 +168,7 @@ class ContentsContainerView : public views::View,
+   // container that holds both contents_webview and devtools_webview.
+   void UpdateDevToolsDockedPlacement();
+ 
++  void UpdateContentsBorder();
+   void UpdateBorderRoundedCorners();
+   void SetBorderRoundedCornersFrom(const gfx::RoundedCornersF& corner_radii);
+ 
+@@ -175,6 +187,9 @@ class ContentsContainerView : public views::View,
+   bool is_in_split_ = false;
+   bool should_round_contents_ = false;
+   bool use_native_frame_materials_ = false;
++  bool leading_vertical_tab_strip_attached_ = false;
++  bool trailing_vertical_tab_strip_attached_ = false;
++  bool top_chrome_attached_ = false;
+   bool round_top_left_window_corner_ = false;
+   bool round_top_right_window_corner_ = false;
+   bool round_bottom_left_window_corner_ = false;
+--- a/chrome/browser/ui/views/frame/contents_container_view.cc
++++ b/chrome/browser/ui/views/frame/contents_container_view.cc
+@@ -225,7 +225,7 @@ void ContentsContainerView::UpdateBorderAndOverlay(bool is_in_split,
+ 
+   if (!should_round_contents) {
+     if (split_changed || rounded_contents_changed) {
+-      SetBorder(nullptr);
++      UpdateContentsBorder();
+       UpdateBorderRoundedCorners();
+ 
+       container_outline_->SetVisible(false);
+@@ -234,15 +234,8 @@ void ContentsContainerView::UpdateBorderAndOverlay(bool is_in_split,
+       }
+     }
+   } else {
+-    const int frame_thickness = ContentsContainerOutline::GetThickness(false);
+     if (split_changed || rounded_contents_changed) {
+-      if (is_in_split) {
+-        SetBorder(views::CreateEmptyBorder(
+-            gfx::Insets(kSplitViewContentPadding + frame_thickness)));
+-      } else {
+-        // Reserve the stroke inside the container's existing outer margin.
+-        SetBorder(views::CreateEmptyBorder(gfx::Insets(frame_thickness)));
+-      }
++      UpdateContentsBorder();
+     }
+     if (split_changed || rounded_contents_changed || corner_state_changed ||
+         native_materials_changed) {
+@@ -350,6 +343,60 @@ void ContentsContainerView::SetBorderRoundedCornersFrom(
+   }
+ }
+ 
++void ContentsContainerView::SetVerticalTabStripAttachment(
++    bool leading_attached,
++    bool trailing_attached) {
++  if (leading_vertical_tab_strip_attached_ == leading_attached &&
++      trailing_vertical_tab_strip_attached_ == trailing_attached) {
++    return;
++  }
++  leading_vertical_tab_strip_attached_ = leading_attached;
++  trailing_vertical_tab_strip_attached_ = trailing_attached;
++  if (!should_round_contents_) {
++    return;
++  }
++  UpdateContentsBorder();
++  UpdateBorderRoundedCorners();
++}
++
++void ContentsContainerView::SetTopChromeAttachment(bool top_attached) {
++  if (top_chrome_attached_ == top_attached) {
++    return;
++  }
++  top_chrome_attached_ = top_attached;
++  if (!should_round_contents_) {
++    return;
++  }
++  UpdateContentsBorder();
++  UpdateBorderRoundedCorners();
++}
++
++void ContentsContainerView::UpdateContentsBorder() {
++  if (!should_round_contents_) {
++    SetBorder(nullptr);
++    return;
++  }
++
++  const int frame_thickness = ContentsContainerOutline::GetThickness(false);
++  if (is_in_split_) {
++    SetBorder(views::CreateEmptyBorder(
++        gfx::Insets(kSplitViewContentPadding + frame_thickness)));
++    return;
++  }
++
++  gfx::Insets insets(frame_thickness);
++  if (leading_vertical_tab_strip_attached_) {
++    insets.set_left(0);
++  }
++  if (trailing_vertical_tab_strip_attached_) {
++    insets.set_right(0);
++  }
++  if (top_chrome_attached_) {
++    insets.set_top(0);
++  }
++  SetBorder(views::CreateEmptyBorder(insets));
++}
++
+ void ContentsContainerView::UpdateBorderRoundedCorners() {
+   if (!should_round_contents_) {
+     SetBorderRoundedCornersFrom(rounded_corner_radii_);
+@@ -368,44 +415,66 @@ void ContentsContainerView::UpdateBorderRoundedCorners() {
+   const int upper_right_radius =
+       round_top_right_window_corner_ ? frame_radius : generic_radius;
+ 
++  const int frame_thickness = ContentsContainerOutline::GetThickness(false);
++  const bool use_content_edge_line = !is_in_split_;
++  const bool flush_left =
++      use_content_edge_line && leading_vertical_tab_strip_attached_;
++  const bool flush_right =
++      use_content_edge_line && trailing_vertical_tab_strip_attached_;
++  const bool flush_top = use_content_edge_line && top_chrome_attached_;
+   const gfx::RoundedCornersF container_rounded_corners(
+       upper_left_radius, upper_right_radius, lower_right_radius,
+       lower_left_radius);
+-  const int frame_thickness = ContentsContainerOutline::GetThickness(false);
+-  // Split view already reserves one pixel of the frame in its content padding.
+-  const int inner_padding =
+-      is_in_split_ ? kSplitViewContentPadding + std::max(0, frame_thickness - 1)
+-                   : frame_thickness;
+-  gfx::RoundedCornersF inner_rounded_corners(
+-      std::max(0, upper_left_radius - inner_padding),
+-      std::max(0, upper_right_radius - inner_padding),
+-      std::max(0, lower_right_radius - inner_padding),
+-      std::max(0, lower_left_radius - inner_padding));
+-
+-  // Put the outline on the content edge so the line and panel share one
+-  // boundary instead of leaving a strip. With native materials, keep a rounded
+-  // content corner at every thickness; without them the existing thick stroke
+-  // still fills the same band, so its appearance is unchanged.
+-  const bool use_content_edge_line = !is_in_split_;
+-  if (use_content_edge_line) {
++  // Keep the attached side's outline stroke visible while its empty frame
++  // band is removed. The stroke overlays the content edge by one pixel
++  // instead of being half-clipped at the container boundary.
++  const int top_inset =
++      flush_top ? ContentsContainerOutline::kThickness : frame_thickness;
++  const int leading_inset =
++      flush_left ? ContentsContainerOutline::kThickness : frame_thickness;
++  const int trailing_inset =
++      flush_right ? ContentsContainerOutline::kThickness : frame_thickness;
++  const gfx::Insets content_insets = gfx::Insets::TLBR(
++      top_inset, leading_inset, frame_thickness, trailing_inset);
++
++  gfx::RoundedCornersF inner_rounded_corners;
++  if (is_in_split_) {
++    // Split view already reserves one pixel of the frame in its content padding.
++    const int inner_padding =
++        kSplitViewContentPadding + std::max(0, frame_thickness - 1);
+     inner_rounded_corners = gfx::RoundedCornersF(
++        std::max(0, upper_left_radius - inner_padding),
++        std::max(0, upper_right_radius - inner_padding),
++        std::max(0, lower_right_radius - inner_padding),
++        std::max(0, lower_left_radius - inner_padding));
++  } else {
++    // Keep the content panel rounded on the attached side too. The expanded
++    // sidebar fills the removed frame band, and the corner reveals frame
++    // material rather than an empty gap.
++    const int inner_upper_left =
+         std::max(ContentsContainerOutline::kCornerRadius,
+-                 upper_left_radius - frame_thickness),
++                 upper_left_radius - frame_thickness);
++    const int inner_upper_right =
+         std::max(ContentsContainerOutline::kCornerRadius,
+-                 upper_right_radius - frame_thickness),
++                 upper_right_radius - frame_thickness);
++    const int inner_lower_right =
+         std::max(ContentsContainerOutline::kCornerRadius,
+-                 lower_right_radius - frame_thickness),
++                 lower_right_radius - frame_thickness);
++    const int inner_lower_left =
+         std::max(ContentsContainerOutline::kCornerRadius,
+-                 lower_left_radius - frame_thickness));
++                 lower_left_radius - frame_thickness);
++    inner_rounded_corners = gfx::RoundedCornersF(
++        inner_upper_left, inner_upper_right, inner_lower_right,
++        inner_lower_left);
+   }
+ 
+   container_outline_->SetOuterCornerRadii(container_rounded_corners);
+   container_outline_->SetCornerRadii(use_content_edge_line
+                                          ? inner_rounded_corners
+                                          : container_rounded_corners);
+-  container_outline_->SetContentInset(use_content_edge_line
+-                                          ? frame_thickness
+-                                          : -1);
++  container_outline_->SetContentInsets(
++      use_content_edge_line ? std::make_optional(content_insets)
++                            : std::nullopt);
+   if (capture_contents_border_view_) {
+     capture_contents_border_view_->SetCornerRadii(container_rounded_corners);
+   }
+--- a/chrome/browser/ui/views/frame/multi_contents_view.h
++++ b/chrome/browser/ui/views/frame/multi_contents_view.h
+@@ -192,6 +192,12 @@ class MultiContentsView
+                                    bool should_show_top_separator);
+   void SetAttachedSideChromeVisibility(bool leading_attached,
+                                        bool trailing_attached);
++  // Marks the content edges that are flush with an attached vertical tab strip.
++  void SetVerticalTabStripAttachment(bool leading_attached,
++                                     bool trailing_attached);
++  // Marks the top edge as flush with attached top chrome. The top
++  // rounded-frame band is dropped so the toolbar/infobar can use that space.
++  void SetTopChromeAttachment(bool top_attached);
+   void SetSplitViewInsets(const gfx::Insets& insets);
+   const gfx::Insets& split_view_insets_for_testing() const {
+     return split_view_insets_;
+@@ -313,6 +319,9 @@ class MultiContentsView
+       contents_container_views_;
+ 
+   ContentsSeparators contents_separators_;
++  bool leading_vertical_tab_strip_attached_ = false;
++  bool trailing_vertical_tab_strip_attached_ = false;
++  bool top_chrome_attached_ = false;
+ 
+   // The view that contains the Lens overlay. The Lens Overlay is a UI overlay
+   // that is shown on top of the web contents. It therefore must always have the
+--- a/chrome/browser/ui/views/frame/multi_contents_view.cc
++++ b/chrome/browser/ui/views/frame/multi_contents_view.cc
+@@ -1044,6 +1044,32 @@ void MultiContentsView::SetAttachedSideChromeVisibility(
+   InvalidateLayout(/*avoid_propagate_during_layout=*/true);
+ }
+ 
++void MultiContentsView::SetVerticalTabStripAttachment(bool leading_attached,
++                                                       bool trailing_attached) {
++  if (leading_vertical_tab_strip_attached_ == leading_attached &&
++      trailing_vertical_tab_strip_attached_ == trailing_attached) {
++    return;
++  }
++  leading_vertical_tab_strip_attached_ = leading_attached;
++  trailing_vertical_tab_strip_attached_ = trailing_attached;
++  for (ContentsContainerView* contents_container_view :
++       contents_container_views_) {
++    contents_container_view->SetVerticalTabStripAttachment(leading_attached,
++                                                           trailing_attached);
++  }
++}
++
++void MultiContentsView::SetTopChromeAttachment(bool top_attached) {
++  if (top_chrome_attached_ == top_attached) {
++    return;
++  }
++  top_chrome_attached_ = top_attached;
++  for (ContentsContainerView* contents_container_view :
++       contents_container_views_) {
++    contents_container_view->SetTopChromeAttachment(top_attached);
++  }
++}
++
+ void MultiContentsView::SetSplitViewInsets(const gfx::Insets& insets) {
+   if (split_view_insets_ == insets) {
+     return;
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -32,6 +32,7 @@
+ #include "chrome/browser/ui/views/animations/tab_strip_animations.h"
+ #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/contents_container_outline.h"
+ #include "chrome/browser/ui/views/frame/custom_corners.h"
+ #include "chrome/browser/ui/views/frame/custom_corners_background.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
+@@ -887,6 +888,31 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
+   const bool infobar_visible = delegate().IsInfobarVisible();
+   const bool should_use_rounded_frame =
+       views().multi_contents_view->ShouldUseRoundedFrame();
++  const bool attach_vertical_tab_strip_to_content =
++      should_use_rounded_frame &&
++      layout_data_->tab_strip_type == TabStripType::kVertical &&
++      !zen.floating_vertical_tab_strip && !delegate().IsActiveTabSplit();
++  const int vertical_tab_strip_content_frame_thickness =
++      attach_vertical_tab_strip_to_content
++          ? ContentsContainerOutline::GetThickness(false)
++          : 0;
++  // Drop the rounded-frame band above the contents when the top chrome is
++  // attached. Unlike the vertical sidebar (which grows to own its band), the
++  // top chrome keeps its height and the web contents grow upward by the
++  // removed thickness so the gap disappears instead of making the toolbar
++  // taller.
++  const bool top_should_show_separator =
++      layout_data_->separator_info.multi_contents_separator &&
++      (infobar_visible || !zen.enabled || zen.TopChromeVisible());
++  const bool top_chrome_attached_for_band =
++      should_use_rounded_frame && !delegate().IsActiveTabSplit() &&
++      ((infobar_visible && should_use_rounded_frame) ||
++       (top_should_show_separator &&
++        (!zen.enabled || zen.top_chrome_ratio >= 0.5f)));
++  const int top_chrome_content_frame_thickness =
++      top_chrome_attached_for_band
++          ? ContentsContainerOutline::GetThickness(false)
++          : 0;
+   const BrowserLayoutParams top_container_parent_params = params;
+   const bool vertical_right_aligned =
+       delegate().IsVerticalTabStripRightAligned();
+@@ -985,6 +1011,15 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
+         last_vertical_tab_strip_width_ = vertical_tab_strip_width;
+       }
+ 
++      if (vertical_tab_strip_width > 0 &&
++          vertical_tab_strip_content_frame_thickness > 0) {
++        // The attached sidebar owns the rounded-frame band next to the
++        // contents. This keeps the web contents where they were while giving
++        // the extra width to the sidebar's address bar, tabs, and toolbar.
++        vertical_tab_strip_width +=
++            vertical_tab_strip_content_frame_thickness;
++      }
++
+       const int vertical_tab_strip_x =
+           vertical_right_aligned
+               ? params.visual_client_area.right() -
+@@ -1043,13 +1078,17 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
+                 TabStripAnimations::kCollapse;
+         clip_content_for_animation =
+             clip_content_for_animation || vertical_tab_strip_resize_animation;
+-        InsetHorizontal(unclipped_contents_region,
+-                        VerticalTabStripRegionView::kCollapsedWidth,
+-                        !vertical_right_aligned);
++        InsetHorizontal(
++            unclipped_contents_region,
++            VerticalTabStripRegionView::kCollapsedWidth +
++                vertical_tab_strip_content_frame_thickness,
++            !vertical_right_aligned);
+       } else {
+-        InsetHorizontal(unclipped_contents_region,
+-                        horizontal_layout.vertical_tab_strip_width,
+-                        !vertical_right_aligned);
++        InsetHorizontal(
++            unclipped_contents_region,
++            horizontal_layout.vertical_tab_strip_width +
++                vertical_tab_strip_content_frame_thickness,
++            !vertical_right_aligned);
+       }
+     }
+     layout.AddChild(views().vertical_tab_strip_region_view,
+@@ -1321,6 +1360,14 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
+     }
+   }
+ 
++  views().multi_contents_view->SetVerticalTabStripAttachment(
++      leading_vertical_tab_strip_attached &&
++          vertical_tab_strip_content_frame_thickness > 0,
++      trailing_vertical_tab_strip_attached &&
++          vertical_tab_strip_content_frame_thickness > 0);
++  views().multi_contents_view->SetTopChromeAttachment(
++      top_chrome_content_frame_thickness > 0);
++
+   // Lay out infobar container.
+   if (IsParentedTo(views().infobar_container, views().browser_view)) {
+     views().infobar_container->SetRoundedFrameState(

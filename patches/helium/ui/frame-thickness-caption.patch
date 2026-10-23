@@ -1,0 +1,62 @@
+--- a/chrome/browser/ui/views/frame/browser_view.cc	2026-10-23 22:37:18
++++ b/chrome/browser/ui/views/frame/browser_view.cc	2026-10-23 22:44:07
+@@ -5749,6 +5749,27 @@
+     }
+   }
+ 
++  // The empty rounded-frame border around the content is part of the window
++  // frame. Treat it as the caption so AppKit provides window drag and the
++  // system titlebar double-click behavior.
++  if (multi_contents_view_) {
++    gfx::Point test_point(point);
++    if (ConvertedHitTest(parent(), multi_contents_view_, &test_point)) {
++      for (const auto& container :
++           multi_contents_view_->contents_container_views()) {
++        if (!container) {
++          continue;
++        }
++        gfx::Point container_point(test_point);
++        views::View::ConvertPointToTarget(multi_contents_view_, container.get(),
++                                          &container_point);
++        if (container->IsPointInFrameThickness(container_point)) {
++          return HTCAPTION;
++        }
++      }
++    }
++  }
++
+   // If the point's y coordinate is below the top of the topmost view and
+   // otherwise within the bounds of this view, the point is considered to be
+   // within the client area.
+--- a/chrome/browser/ui/views/frame/contents_container_view.cc	2026-10-23 22:37:18
++++ b/chrome/browser/ui/views/frame/contents_container_view.cc	2026-10-23 22:44:07
+@@ -270,6 +270,16 @@
+ #endif  //  BUILDFLAG(IS_CHROMEOS)
+ }
+ 
++bool ContentsContainerView::IsPointInFrameThickness(
++    const gfx::Point& point) const {
++  if (!should_round_contents_ ||
++      ContentsContainerOutline::GetThickness(false) <= 0 ||
++      !GetLocalBounds().Contains(point)) {
++    return false;
++  }
++  return !GetContentsBounds().Contains(point);
++}
++
+ void ContentsContainerView::SetBorderRoundedCornersFrom(
+     const gfx::RoundedCornersF& corner_radii) {
+   // Update devtools rounded corners. Note, devtools exists behind the contents
+--- a/chrome/browser/ui/views/frame/contents_container_view.h	2026-10-23 22:37:18
++++ b/chrome/browser/ui/views/frame/contents_container_view.h	2026-10-23 22:44:07
+@@ -125,6 +125,10 @@
+                               bool round_bottom_left_window_corner,
+                               bool round_bottom_right_window_corner);
+ 
++  // Returns true when |point|, in this view's coordinates, is in the empty
++  // rounded-frame border around the content panel.
++  bool IsPointInFrameThickness(const gfx::Point& point) const;
++
+   void ShowCaptureContentsBorder();
+   void HideCaptureContentsBorder();
+   void SetCaptureContentsBorderLocation(

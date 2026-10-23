@@ -1,0 +1,38 @@
+--- a/chrome/browser/ui/layout_constants.cc	2026-10-23 19:03:25
++++ b/chrome/browser/ui/layout_constants.cc	2026-10-23 19:05:22
+@@ -181,9 +181,9 @@
+     case LayoutConstant::kVerticalTabCornerRadius:
+       return 8;
+     case LayoutConstant::kVerticalTabHeight:
+-      return 30;
++      return comfortable ? 36 : 30;
+     case LayoutConstant::kVerticalTabPinnedHeight:
+-      return 30;
++      return comfortable ? 36 : 30;
+     case LayoutConstant::kVerticalTabMinWidth:
+       return 30;
+     case LayoutConstant::kVerticalTabStripHorizontalPadding:
+--- a/chrome/browser/ui/views/tabs/common/tab_group_view_layout.cc	2026-10-23 19:03:25
++++ b/chrome/browser/ui/views/tabs/common/tab_group_view_layout.cc	2026-10-23 19:05:22
+@@ -26,8 +26,11 @@
+ constexpr int kTabVerticalPadding = 2;
+ constexpr int kGroupLineWidth = 2;
+ constexpr int kGroupLineCollapsedLeadingPadding = 2;
+-constexpr int kGroupHeaderHeight = 26;
+ constexpr int kGroupHeaderVerticalMargin = 3;
++
++int GetGroupHeaderHeight() {
++  return GetHeliumUiDensity() == HeliumUiDensity::kComfortable ? 32 : 26;
++}
+ }  // namespace
+ 
+ TabGroupViewLayout::TabGroupViewLayout(TabStripOrientation orientation)
+@@ -83,7 +86,7 @@
+   }
+ 
+   header_bounds.set_y(height);
+-  header_bounds.set_height(kGroupHeaderHeight);
++  header_bounds.set_height(GetGroupHeaderHeight());
+   // If width is bounded, the group header should respect the width constraints
+   // and take up the available width excluding trailing horizontal padding.
+   if (size_bounds.width().is_bounded()) {

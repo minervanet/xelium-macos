@@ -1,0 +1,184 @@
+--- a/chrome/browser/ui/views/frame/contents_container_outline.cc	2026-10-23 21:59:44
++++ b/chrome/browser/ui/views/frame/contents_container_outline.cc	2026-10-23 22:55:30
+@@ -114,6 +114,23 @@
+   SchedulePaint();
+ }
+ 
++void ContentsContainerOutline::SetOuterCornerRadii(
++    const gfx::RoundedCornersF& radii) {
++  if (outer_corner_radii_ == radii) {
++    return;
++  }
++  outer_corner_radii_ = radii;
++  SchedulePaint();
++}
++
++void ContentsContainerOutline::SetContentInset(int inset) {
++  if (content_inset_ == inset) {
++    return;
++  }
++  content_inset_ = inset;
++  SchedulePaint();
++}
++
+ void ContentsContainerOutline::UpdateState(bool is_active,
+                                            bool is_highlighted) {
+   UpdateState(is_highlighted, GetColor(is_active, is_highlighted));
+@@ -144,22 +161,44 @@
+     return;
+   }
+ 
+-  // Draw the bordering stroke.
+   cc::PaintFlags flags;
+-  flags.setStrokeWidth(stroke_thickness);
+   flags.setColor(GetColorProvider()->GetColor(stroke_color_));
+-  flags.setStyle(cc::PaintFlags::kStroke_Style);
+   flags.setAntiAlias(true);
+ 
+   gfx::RectF local_bounds(GetLocalBounds());
+   const float half_thickness = stroke_thickness / 2.0f;
+-  local_bounds.Inset(half_thickness);
++  const bool at_content_edge = content_inset_ >= 0;
++  if (!helium::ShouldUseNativeFrameMaterials(this) && at_content_edge) {
++    // The non-material band is still the outline color, but its inner edge must
++    // follow the rounded content panel instead of exposing a square corner at
++    // larger thicknesses.
++    gfx::RectF inner_bounds(local_bounds);
++    inner_bounds.Inset(content_inset_);
++    SkPathBuilder builder(SkPathFillType::kEvenOdd);
++    builder.addPath(GetPath(local_bounds, outer_corner_radii_));
++    builder.addPath(GetPath(inner_bounds, corner_radii_));
++    SkPath path = builder.detach();
++    flags.setStyle(cc::PaintFlags::kFill_Style);
++    canvas->DrawPath(path, flags);
++    return;
++  }
+ 
++  flags.setStrokeWidth(stroke_thickness);
++  flags.setStyle(cc::PaintFlags::kStroke_Style);
++  if (at_content_edge) {
++    // Keep the stroke on the outside of the content panel, with its inner edge
++    // exactly on the content boundary.
++    local_bounds.Inset(content_inset_ - half_thickness);
++  } else {
++    local_bounds.Inset(half_thickness);
++  }
++
++  const float radius_delta = at_content_edge ? half_thickness : -half_thickness;
+   const gfx::RoundedCornersF corner_radii(
+-      std::max(0.0f, corner_radii_.upper_left() - half_thickness),
+-      std::max(0.0f, corner_radii_.upper_right() - half_thickness),
+-      std::max(0.0f, corner_radii_.lower_right() - half_thickness),
+-      std::max(0.0f, corner_radii_.lower_left() - half_thickness));
++      std::max(0.0f, corner_radii_.upper_left() + radius_delta),
++      std::max(0.0f, corner_radii_.upper_right() + radius_delta),
++      std::max(0.0f, corner_radii_.lower_right() + radius_delta),
++      std::max(0.0f, corner_radii_.lower_left() + radius_delta));
+ 
+   SkPath path = GetPath(local_bounds, corner_radii);
+ 
+--- a/chrome/browser/ui/views/frame/contents_container_outline.h	2026-10-23 21:59:44
++++ b/chrome/browser/ui/views/frame/contents_container_outline.h	2026-10-23 22:55:10
+@@ -38,6 +38,10 @@
+   bool is_highlighted() const { return is_highlighted_; }
+ 
+   void SetCornerRadii(const gfx::RoundedCornersF& radii);
++  void SetOuterCornerRadii(const gfx::RoundedCornersF& radii);
++  // A non-negative inset moves the outline from the container edge to the
++  // content edge, so it can hug the rounded content panel.
++  void SetContentInset(int inset);
+   void UpdateState(bool is_active, bool is_highlighted);
+   void UpdateState(bool is_highlighted, ui::ColorId stroke_color);
+ 
+@@ -50,8 +54,10 @@
+   void OnViewIsDeleting(views::View* observed_view) override;
+ 
+   bool is_highlighted_ = false;
++  int content_inset_ = -1;
+   ui::ColorId stroke_color_ = kColorMultiContentsViewInactiveContentOutline;
+   gfx::RoundedCornersF corner_radii_{kCornerRadius};
++  gfx::RoundedCornersF outer_corner_radii_{kCornerRadius};
+   base::ScopedObservation<views::View, views::ViewObserver>
+       view_bounds_observer_{this};
+ };
+--- a/chrome/browser/ui/views/frame/contents_container_view.cc	2026-10-23 21:59:44
++++ b/chrome/browser/ui/views/frame/contents_container_view.cc	2026-10-23 22:55:10
+@@ -30,6 +30,7 @@
+ #include "chrome/browser/ui/views/frame/tab_modal_dialog_host.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/browser/ui/views/indigo/indigo_toolbar.h"
+ #include "chrome/browser/ui/views/new_tab_footer/footer_web_view.h"
+ #include "chrome/common/chrome_features.h"
+@@ -210,6 +211,11 @@
+       round_top_right_window_corner_ != round_top_right ||
+       round_bottom_left_window_corner_ != round_bottom_left ||
+       round_bottom_right_window_corner_ != round_bottom_right;
++  const bool use_native_frame_materials =
++      helium::ShouldUseNativeFrameMaterials(browser_view_);
++  const bool native_materials_changed =
++      use_native_frame_materials != use_native_frame_materials_;
++  use_native_frame_materials_ = use_native_frame_materials;
+   is_in_split_ = is_in_split;
+   should_round_contents_ = should_round_contents;
+   round_top_left_window_corner_ = round_top_left;
+@@ -238,7 +244,8 @@
+         SetBorder(views::CreateEmptyBorder(gfx::Insets(frame_thickness)));
+       }
+     }
+-    if (split_changed || rounded_contents_changed || corner_state_changed) {
++    if (split_changed || rounded_contents_changed || corner_state_changed ||
++        native_materials_changed) {
+       UpdateBorderRoundedCorners();
+     }
+ 
+@@ -359,13 +366,36 @@
+   const int inner_padding =
+       is_in_split_ ? kSplitViewContentPadding + std::max(0, frame_thickness - 1)
+                    : frame_thickness;
+-  const gfx::RoundedCornersF inner_rounded_corners(
++  gfx::RoundedCornersF inner_rounded_corners(
+       std::max(0, upper_left_radius - inner_padding),
+       std::max(0, upper_right_radius - inner_padding),
+       std::max(0, lower_right_radius - inner_padding),
+       std::max(0, lower_left_radius - inner_padding));
+ 
+-  container_outline_->SetCornerRadii(container_rounded_corners);
++  // Put the outline on the content edge so the line and panel share one
++  // boundary instead of leaving a strip. With native materials, keep a rounded
++  // content corner at every thickness; without them the existing thick stroke
++  // still fills the same band, so its appearance is unchanged.
++  const bool use_content_edge_line = !is_in_split_;
++  if (use_content_edge_line) {
++    inner_rounded_corners = gfx::RoundedCornersF(
++        std::max(ContentsContainerOutline::kCornerRadius,
++                 upper_left_radius - frame_thickness),
++        std::max(ContentsContainerOutline::kCornerRadius,
++                 upper_right_radius - frame_thickness),
++        std::max(ContentsContainerOutline::kCornerRadius,
++                 lower_right_radius - frame_thickness),
++        std::max(ContentsContainerOutline::kCornerRadius,
++                 lower_left_radius - frame_thickness));
++  }
++
++  container_outline_->SetOuterCornerRadii(container_rounded_corners);
++  container_outline_->SetCornerRadii(use_content_edge_line
++                                         ? inner_rounded_corners
++                                         : container_rounded_corners);
++  container_outline_->SetContentInset(use_content_edge_line
++                                          ? frame_thickness
++                                          : -1);
+   if (capture_contents_border_view_) {
+     capture_contents_border_view_->SetCornerRadii(container_rounded_corners);
+   }
+--- a/chrome/browser/ui/views/frame/contents_container_view.h	2026-10-23 21:59:44
++++ b/chrome/browser/ui/views/frame/contents_container_view.h	2026-10-23 22:29:26
+@@ -170,6 +170,7 @@
+ 
+   bool is_in_split_ = false;
+   bool should_round_contents_ = false;
++  bool use_native_frame_materials_ = false;
+   bool round_top_left_window_corner_ = false;
+   bool round_top_right_window_corner_ = false;
+   bool round_bottom_left_window_corner_ = false;

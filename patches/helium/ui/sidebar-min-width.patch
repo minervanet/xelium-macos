@@ -1,0 +1,287 @@
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc	2026-10-23 19:29:48
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc	2026-10-23 19:34:16
+@@ -486,13 +486,9 @@
+ 
+ gfx::Size VerticalTabStripRegionView::GetMinimumSize() const {
+   auto min_size = BaseTabStripRegionView::GetMinimumSize();
+-  const int min_uncollapsed =
+-      (browser_view() && browser_view()->IsVerticalAddressBarInSidebar())
+-          ? VerticalTabStripHeaderView::kMinimumWidth
+-          : kUncollapsedMinWidth;
+   min_size.set_width((state_controller_->IsCollapsed() || IsAnimatingSize())
+                          ? kCollapsedWidth
+-                         : min_uncollapsed);
++                         : kUncollapsedMinWidth);
+   return min_size;
+ }
+ 
+@@ -504,10 +500,8 @@
+   const auto motion =
+       controller->GetCurrentMotion(TabStripAnimations::kVerticalTabStrip);
+   const int target_uncollapsed_width =
+-      (browser_view() && browser_view()->IsVerticalAddressBarInSidebar())
+-          ? std::max(target_collapse_state_.uncollapsed_width,
+-                     VerticalTabStripHeaderView::kMinimumWidth)
+-          : target_collapse_state_.uncollapsed_width;
++      std::max(target_collapse_state_.uncollapsed_width,
++               kUncollapsedMinWidth);
+   const int expand_amount =
+       std::max(0, target_uncollapsed_width - kCollapsedWidth);
+   const double expand_percent =
+@@ -718,10 +712,7 @@
+     state_controller_->SetIsResizing(false);
+   }
+ 
+-  const int min_uncollapsed =
+-      (browser_view() && browser_view()->IsVerticalAddressBarInSidebar())
+-          ? VerticalTabStripHeaderView::kMinimumWidth
+-          : kUncollapsedMinWidth;
++  const int min_uncollapsed = kUncollapsedMinWidth;
+   const int collapse_snap_width = (min_uncollapsed + kCollapsedWidth) / 2;
+ 
+   tabs::VerticalTabStripState new_state;
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.cc	2026-10-23 19:29:48
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.cc	2026-10-23 19:48:14
+@@ -4,8 +4,10 @@
+ 
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.h"
+ 
++#include <algorithm>
+ #include <memory>
+ #include <utility>
++#include <vector>
+ 
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h"
+@@ -23,6 +25,118 @@
+ #include "ui/views/layout/flex_layout.h"
+ #include "ui/views/view_class_properties.h"
+ 
++namespace {
++
++constexpr int kToolbarControlRowSpacing = 4;
++
++struct ToolbarControl {
++  views::View* view;
++  gfx::Size size;
++  gfx::Insets margin;
++};
++
++int ControlWidth(const ToolbarControl& control) {
++  return control.size.width() + control.margin.width();
++}
++
++int ControlHeight(const ToolbarControl& control) {
++  return control.size.height() + control.margin.height();
++}
++
++int ComputeToolbarControlLayout(views::View* container,
++                                views::View* spacer,
++                                int width,
++                                std::vector<gfx::Rect>* bounds) {
++  width = std::max(width, 1);
++  std::vector<ToolbarControl> leading;
++  std::vector<ToolbarControl> trailing;
++  bool after_spacer = false;
++  for (views::View* child : container->children()) {
++    if (child == spacer) {
++      after_spacer = true;
++      continue;
++    }
++    if (!child->GetVisible()) {
++      continue;
++    }
++    const auto* margin = child->GetProperty(views::kMarginsKey);
++    (after_spacer ? trailing : leading)
++        .push_back({child, child->GetPreferredSize(),
++                    margin ? *margin : gfx::Insets()});
++  }
++  if (leading.empty() && trailing.empty()) {
++    return 0;
++  }
++
++  int row_height = GetLayoutConstant(LayoutConstant::kToolbarButtonHeight);
++  for (const auto& control : leading) {
++    row_height = std::max(row_height, ControlHeight(control));
++  }
++  for (const auto& control : trailing) {
++    row_height = std::max(row_height, ControlHeight(control));
++  }
++
++  int leading_width = 0;
++  for (const auto& control : leading) {
++    leading_width += ControlWidth(control);
++  }
++  int trailing_width = 0;
++  for (const auto& control : trailing) {
++    trailing_width += ControlWidth(control);
++  }
++
++  std::vector<gfx::Rect> result;
++  result.reserve(leading.size() + trailing.size());
++  auto append = [&](const ToolbarControl& control, int x, int y) {
++    result.emplace_back(
++        x + control.margin.left(),
++        y + (row_height - ControlHeight(control)) / 2 + control.margin.top(),
++        std::min(control.size.width(),
++                 std::max(0, width - control.margin.width())),
++        control.size.height());
++  };
++
++  int height = row_height;
++  if (leading_width + trailing_width <= width) {
++    int x = 0;
++    for (const auto& control : leading) {
++      append(control, x, 0);
++      x += ControlWidth(control);
++    }
++    int trailing_x = std::max(width - trailing_width, x);
++    for (const auto& control : trailing) {
++      append(control, trailing_x, 0);
++      trailing_x += ControlWidth(control);
++    }
++  } else {
++    int x = 0;
++    int y = 0;
++    auto place = [&](const ToolbarControl& control) {
++      const int child_width = std::min(ControlWidth(control), width);
++      if (x > 0 && x + child_width > width) {
++        x = 0;
++        y += row_height + kToolbarControlRowSpacing;
++      }
++      append(control, x, y);
++      x += child_width;
++    };
++    for (const auto& control : leading) {
++      place(control);
++    }
++    for (const auto& control : trailing) {
++      place(control);
++    }
++    height = y + row_height;
++  }
++
++  if (bounds) {
++    *bounds = std::move(result);
++  }
++  return height;
++}
++
++}  // namespace
++
+ VerticalTabStripHeaderView::VerticalTabStripHeaderView(
+     BrowserView* browser_view)
+     : browser_view_(browser_view) {
+@@ -36,10 +150,6 @@
+                                        views::MaximumFlexSizeRule::kPreferred));
+ 
+   top_controls_container_ = AddChildView(std::make_unique<views::View>());
+-  auto* layout = top_controls_container_->SetLayoutManager(
+-      std::make_unique<views::FlexLayout>());
+-  layout->SetOrientation(views::LayoutOrientation::kHorizontal);
+-  layout->SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
+ 
+   spacer_ =
+       top_controls_container_->AddChildView(std::make_unique<views::View>());
+@@ -61,14 +171,28 @@
+   ClearToolbarControls();
+ }
+ 
++int VerticalTabStripHeaderView::GetToolbarControlsHeight(int width) const {
++  if (!top_controls_container_ || !top_controls_container_->GetVisible()) {
++    return 0;
++  }
++  return ComputeToolbarControlLayout(top_controls_container_, spacer_.get(),
++                                     width, nullptr);
++}
++
+ gfx::Size VerticalTabStripHeaderView::CalculatePreferredSize(
+     const views::SizeBounds& available_size) const {
+   if (!GetVisible() || is_collapsed_) {
+     return gfx::Size(0, 0);
+   }
++  const int width =
++      (available_size.width().is_bounded() &&
++       available_size.width().value() > 0)
++          ? available_size.width().value()
++          : kMinimumWidth;
++  const int controls_height = GetToolbarControlsHeight(width);
+   const int btn_height =
+       (top_controls_container_ && top_controls_container_->GetVisible())
+-          ? (GetLayoutConstant(LayoutConstant::kToolbarButtonHeight) + 4)
++          ? (controls_height + 4)
+           : 0;
+   const int loc_height =
+       (location_bar_view_ && location_bar_view_->GetVisible())
+@@ -82,15 +206,9 @@
+   if (!GetVisible() || is_collapsed_) {
+     return gfx::Size(0, 0);
+   }
+-  const int btn_height =
+-      (top_controls_container_ && top_controls_container_->GetVisible())
+-          ? (GetLayoutConstant(LayoutConstant::kToolbarButtonHeight) + 4)
+-          : 0;
+-  const int loc_height =
+-      (location_bar_view_ && location_bar_view_->GetVisible())
+-          ? (GetLayoutConstant(LayoutConstant::kLocationBarHeight) + 4)
+-          : 0;
+-  return gfx::Size(0, btn_height + loc_height + 4);
++  return gfx::Size(
++      0,
++      CalculatePreferredSize(views::SizeBounds(kMinimumWidth, 0)).height());
+ }
+ 
+ void VerticalTabStripHeaderView::Layout(PassKey) {
+@@ -98,16 +216,26 @@
+   if (!GetVisible() || is_collapsed_) {
+     return;
+   }
+-  const int btn_height =
+-      GetLayoutConstant(LayoutConstant::kToolbarButtonHeight);
+   const int loc_height = GetLayoutConstant(LayoutConstant::kLocationBarHeight);
+   const int spacing = 4;
+   const int w = width();
+ 
+   int current_y = 0;
+   if (top_controls_container_ && top_controls_container_->GetVisible()) {
+-    top_controls_container_->SetBounds(0, current_y, w, btn_height);
+-    current_y += btn_height + spacing;
++    std::vector<gfx::Rect> bounds;
++    const int controls_height = ComputeToolbarControlLayout(
++        top_controls_container_, spacer_.get(), w, &bounds);
++    top_controls_container_->SetBounds(0, current_y, w, controls_height);
++    size_t index = 0;
++    for (views::View* child : top_controls_container_->children()) {
++      if (child == spacer_ || !child->GetVisible()) {
++        continue;
++      }
++      if (index < bounds.size()) {
++        child->SetBoundsRect(bounds[index++]);
++      }
++    }
++    current_y += controls_height + spacing;
+   }
+ 
+   if (location_bar_view_ && location_bar_view_->GetVisible()) {
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.h	2026-10-23 19:29:48
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.h	2026-10-23 19:34:16
+@@ -26,8 +26,9 @@
+   METADATA_HEADER(VerticalTabStripHeaderView, views::View)
+ 
+  public:
+-  // Keeps the omnibox usable alongside the toolbar controls.
+-  static constexpr int kMinimumWidth = 280;
++  // Matches VerticalTabStripRegionView::kUncollapsedMinWidth. At narrower
++  // widths the toolbar controls wrap onto additional rows.
++  static constexpr int kMinimumWidth = 160;
+ 
+   explicit VerticalTabStripHeaderView(BrowserView* browser_view);
+   VerticalTabStripHeaderView(const VerticalTabStripHeaderView&) = delete;
+@@ -62,6 +63,7 @@
+   void Layout(PassKey) override;
+ 
+  private:
++  int GetToolbarControlsHeight(int width) const;
+   raw_ptr<BrowserView> browser_view_ = nullptr;
+ 
+   raw_ptr<views::View> top_controls_container_ = nullptr;
