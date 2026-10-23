@@ -43,3 +43,14 @@
  
  // These values are persisted to logs. Entries should not be renumbered and
  // numeric values should never be reused.
+--- a/chrome/app/app-Info.plist
++++ b/chrome/app/app-Info.plist
+@@ -149,8 +149,6 @@
+ 	<key>CFBundleIconFile</key>
+ 	<string>app.icns</string>
+-	<key>CFBundleIconName</key>
+-	<string>AppIcon</string>
+ 	<key>CFBundleIdentifier</key>
+ 	<string>${CHROMIUM_BUNDLE_ID}</string>
+ 	<key>CFBundleInfoDictionaryVersion</key>
+ 	<string>6.0</string>
