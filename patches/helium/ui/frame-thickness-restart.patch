@@ -96,6 +96,15 @@
  
    protected onCustomizeToolbarClick_() {
      this.appearanceBrowserProxy_.openCustomizeChromeToolbarSection();
+@@ -171,7 +171,8 @@
+       bookmarksBarOptions_: {type: Array},
+       uiDensityPref_: {type: Object},
+       uiDensityOptions_: {type: Array},
+       roundedFramePref_: {type: Object},
++      frameThicknessPref_: {type: Object},
+       roundedFrameThicknessOptions_: {type: Array},
+       showVerticalTabsExpandOnHoverEnabled_: {type: Boolean},
+       showOrganizerPanelEnabled_: {type: Boolean},
 --- a/chrome/browser/resources/settings/appearance_page/appearance_page.html.ts
 +++ b/chrome/browser/resources/settings/appearance_page/appearance_page.html.ts
 @@ -88,10 +88,17 @@
