@@ -25,7 +25,7 @@ Everything here belongs to the original authors.
 - Helium: https://github.com/imputnet/helium
 - Unmerged PRs included:
   - [#2747](https://github.com/imputnet/helium/pull/2747): "comfortable" interface size (by dumbmoron)
-  - [#2367](https://github.com/imputnet/helium/pull/2367): show address bar in sidebar (by its author)
+  - [#2367](https://github.com/imputnet/helium/pull/2367): show address bar in sidebar (by heloess)
 
 My own patches: comfortable sizing for vertical tabs, configurable rounded-frame thickness, narrower sidebar with the address bar.
 
