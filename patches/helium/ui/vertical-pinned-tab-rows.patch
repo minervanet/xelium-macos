@@ -237,6 +237,15 @@
  import '../controls/settings_toggle_button.js';
  import '../settings_page/settings_section.js';
  
+@@ -54,7 +54,8 @@
+   static override get properties() {
+     return {
+       browserLayoutPref_: {type: Object},
+       browserLayoutOptions_: {type: Array},
++      pinnedTabsPerRowOptions_: {type: Array},
+       showVerticalTabsExpandOnHoverEnabled_: {type: Boolean},
+       zenModePref_: {type: Object},
+       zenModeSidebarPinnedPref_: {type: Object},
 @@ -92,9 +92,17 @@
        name: loadTimeData.getString('browserLayoutVertical'),
        preview: 'vertical',
@@ -258,12 +267,3 @@
        loadTimeData.getBoolean('showVerticalTabsExpandOnHoverEnabled');
  
    override connectedCallback() {
-@@ -54,7 +54,8 @@
-   static override get properties() {
-     return {
-       browserLayoutPref_: {type: Object},
-       browserLayoutOptions_: {type: Array},
-+      pinnedTabsPerRowOptions_: {type: Array},
-       showVerticalTabsExpandOnHoverEnabled_: {type: Boolean},
-       zenModePref_: {type: Object},
-       zenModeSidebarPinnedPref_: {type: Object},
