@@ -1,47 +1,40 @@
-# xelium
 <p align="center">
   <img src="resources/assets/legacy.png" width="128" alt="Xelium app icon">
 </p>
-macOS packaging & development tooling for the
-[Xelium Browser](https://github.com/minervanet/xelium-macos).
 
-Xelium is a custom macOS build/fork focused on tailored features and workflow
-enhancements, evolving the Helium base with its own defaults, patches, and
-release flow.
+# Xelium
 
-## Building and development
-macOS is our primary development platform, so it's the recommended environment
-for developing new Xelium features.
+Xelium is an unofficial, personal build of [Helium](https://github.com/imputnet/helium). It is not affiliated with or endorsed by the Helium team.
 
-[> See docs/building.md](docs/building.md)
+## What this is
 
-## Contributing
-Before contributing to this repo, please read the guidelines in the main repo's
-[CONTRIBUTING.md](https://github.com/minervanet/xelium-macos/blob/main/CONTRIBUTING.md).
+A proof of concept showing that Chromium/Helium can be made to look and feel like Arc, using the native Chromium frame instead of CEF.
 
-Found a bug or have a feature request? Please open an issue on the
-[issue tracker](https://github.com/minervanet/xelium-macos/issues).
+The browser is still 100% Helium under the hood. The visible changes to the app's identity are the name (Xelium), the app icon, and the bundle ID (`net.minerva.xelium`), so Xelium and Helium can be installed side by side without conflicting.
+
+## What I changed
+
+Mostly nothing of my own. Xelium is Helium plus a handful of open, unmerged pull requests from the Helium repo, collected into one personal build. Many of those PRs would take a long time to land, or may never be merged, because the Helium project is strict about what goes in, which is a good thing for the main project. This build is a place to try them together.
+
+I also added a few small patches of my own to make these pieces work together (see below).
 
 ## Credits
 
-### Depot
-Big thank you to [Depot](https://depot.dev/) for sponsoring our runners,
-which handle the macOS builds of Xelium. Their high-performance infrastructure
-lets us compile, package, and release new builds of Xelium within hours,
-not days.
+Everything here belongs to the original authors.
 
-### ungoogled-chromium-macos
-This repo is based on
-[ungoogled-chromium-macos](https://github.com/ungoogled-software/ungoogled-chromium-macos),
-but heavily modified for Xelium (via the Helium base it forks). Special thanks
-to everyone behind ungoogled-chromium, they made working with Chromium
-infinitely easier.
+- Helium: https://github.com/imputnet/helium
+- Unmerged PRs included:
+  - [#2747](https://github.com/imputnet/helium/pull/2747): "comfortable" interface size (by dumbmoron)
+  - [#2367](https://github.com/imputnet/helium/pull/2367): show address bar in sidebar (by its author)
 
-## License
-All code, patches, modified portions of imported code or patches, and
-any other content that is unique to Xelium and not imported from other
-repositories is licensed under GPL-3.0. See [LICENSE](LICENSE).
+My own patches: comfortable sizing for vertical tabs, configurable rounded-frame thickness, narrower sidebar with the address bar.
 
-Any content imported from other projects retains its original license (for
-example, any original unmodified code imported from ungoogled-chromium remains
-licensed under their [BSD 3-Clause license](LICENSE.ungoogled_chromium)).
+## Updates
+
+I'll keep Xelium updated as long as I'm still using Helium and Helium is still around. Updates won't be quick, since every big change means a Chromium rebuild that takes hours. Thanks for your patience.
+
+## Notes
+
+- This is for personal use and testing. It has no support and no guarantees.
+- Behavior may break on Chromium updates, since the patches need refreshing each time.
+- Licensing follows the upstream projects. Check Helium's license in the repo.
