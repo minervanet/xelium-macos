@@ -1,0 +1,151 @@
+--- a/chrome/browser/ui/animation/browser_animation_controller.cc
++++ b/chrome/browser/ui/animation/browser_animation_controller.cc
+@@ -560,10 +560,22 @@
+  private:
+   // gfx::AnimationDelegate:
+   void AnimationEnded(const gfx::Animation*) override {
++    if (!current_motion_) {
++      // A listener may have consumed the motion while the animation was
++      // finishing; there is nothing left to end.
++      return;
++    }
+     const auto params = GetParamsLookup();
+     OnAnimationEnded(params);
+   }
+   void AnimationProgressed(const gfx::Animation* animation) override {
++    if (!current_motion_) {
++      // The motion was cleared or replaced without stopping the animator.
++      // Drop the stale tick and stop the animation instead of tripping the
++      // CHECK in UpdateCurrentValues().
++      animator_->Stop();
++      return;
++    }
+     const auto params = GetParamsLookup();
+     const double unscaled_percent = animation->GetCurrentValue();
+     OnAnimationProgressed(unscaled_percent, params);
+@@ -614,14 +626,23 @@
+   // Does the work of ending an animation. Listeners will be updated with the
+   // animation active at 100% before the animation is cleaned up.
+   void OnAnimationEnded(const SequenceParamsLookup& params) {
++    const BrowserAnimationMotion motion = current_motion_;
+     UpdateCurrentValues(current_motion_info_.duration, 1.0, params);
+     if (logger_) {
+       logger_->MaybeLog();
+       logger_.reset();
+     }
++    // Persist before notifying so a motion started from the notification
++    // cannot leak its initial values into the values of the ended motion.
++    PersistCurrentValues(params);
+     Notify(BrowserAnimationUpdate::kEnded);
+-    current_motion_ = BrowserAnimationMotion();
+-    PersistCurrentValues(params);
++    // A listener may start a new motion from the notification. Only clear the
++    // motion that actually ended; clearing unconditionally would leave the
++    // animator running with no current motion, and the next tick would hit
++    // the CHECK in UpdateCurrentValues().
++    if (current_motion_ == motion) {
++      current_motion_ = BrowserAnimationMotion();
++    }
+   }
+ 
+   // Does the work of canceling the current animation.
+@@ -632,8 +653,12 @@
+     PersistCurrentValues(params);
+     logger_.reset();
+     animator_->Stop();
++    // Clear before notifying: a listener handling the cancellation may start
++    // a new motion, and the controller already reports no current motion
++    // during kCanceled. Clearing afterwards would clobber that new motion
++    // while its animator keeps running.
++    current_motion_ = BrowserAnimationMotion();
+     Notify(BrowserAnimationUpdate::kCanceled);
+-    current_motion_ = BrowserAnimationMotion();
+     return true;
+   }
+ 
+@@ -646,8 +671,8 @@
+     }
+     logger_.reset();
+     animator_->Stop();
++    current_motion_ = BrowserAnimationMotion();
+     Notify(BrowserAnimationUpdate::kCanceled);
+-    current_motion_ = BrowserAnimationMotion();
+     return true;
+   }
+ 
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -287,7 +287,12 @@
+     return false;
+   }
+ 
+-  if (IsHitInView(header_view_, point)) {
++  // Only a visible header may claim the point. Hidden children keep their
++  // last bounds (views do not reset them), so an unconditional hit test would
++  // treat the header's stale rectangle as window caption and swallow clicks
++  // meant for the tabs underneath it.
++  if (header_view_ && header_view_->GetVisible() &&
++      IsHitInView(header_view_, point)) {
+     gfx::Point point_in_header = point;
+     views::View::ConvertPointToTarget(this, header_view_, &point_in_header);
+     return header_view_->IsPositionInWindowCaption(point_in_header);
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -892,10 +892,13 @@
+       should_use_rounded_frame &&
+       layout_data_->tab_strip_type == TabStripType::kVertical &&
+       !zen.floating_vertical_tab_strip && !delegate().IsActiveTabSplit();
+-  const int vertical_tab_strip_content_frame_thickness =
+-      attach_vertical_tab_strip_to_content
+-          ? ContentsContainerOutline::GetThickness(false)
+-          : 0;
++  // The attached sidebar owns the rounded-frame band next to the contents.
++  // That band is part of the sidebar's width, so it has to disappear together
++  // with the sidebar: keeping it while collapsed leaves the strip one band
++  // wider than upstream and stops the contents' rounded corners from lining up
++  // with the strip. The actual value is computed below, once the strip width
++  // for this layout pass is known.
++  int vertical_tab_strip_content_frame_thickness = 0;
+   // Drop the rounded-frame band above the contents when the top chrome is
+   // attached. Unlike the vertical sidebar (which grows to own its band), the
+   // top chrome keeps its height and the web contents grow upward by the
+@@ -1011,11 +1014,19 @@
+         last_vertical_tab_strip_width_ = vertical_tab_strip_width;
+       }
+ 
+-      if (vertical_tab_strip_width > 0 &&
+-          vertical_tab_strip_content_frame_thickness > 0) {
+-        // The attached sidebar owns the rounded-frame band next to the
+-        // contents. This keeps the web contents where they were while giving
+-        // the extra width to the sidebar's address bar, tabs, and toolbar.
++      // The attached sidebar owns the rounded-frame band next to the
++      // contents. This keeps the web contents where they were while giving
++      // the extra width to the sidebar's address bar, tabs, and toolbar. The
++      // band shrinks away over the last few pixels of the collapse so the
++      // strip lands exactly on its collapsed width instead of staying one
++      // band wider than upstream.
++      vertical_tab_strip_content_frame_thickness =
++          attach_vertical_tab_strip_to_content
++              ? std::clamp(vertical_tab_strip_width -
++                               VerticalTabStripRegionView::kCollapsedWidth,
++                           0, ContentsContainerOutline::GetThickness(false))
++              : 0;
++      if (vertical_tab_strip_content_frame_thickness > 0) {
+         vertical_tab_strip_width +=
+             vertical_tab_strip_content_frame_thickness;
+       }
+@@ -1579,9 +1590,12 @@
+       floating_style = vertical_right_aligned ? FloatingStyle::kAttachedTrailing
+                                               : FloatingStyle::kAttachedLeading;
+       // Square off the corners as the strip reaches its collapsed width, so
+-      // they never uncover the page's own rounded corners.
++      // they never uncover the page's own rounded corners. The attached band
++      // is part of the strip's bounds but not of the strip's content width,
++      // so discount it or the corners would never square off.
+       floating_corner_radius = std::clamp(
+-          tabstrip_bounds->width() - horizontal_layout.vertical_tab_strip_width,
++          tabstrip_bounds->width() - horizontal_layout.vertical_tab_strip_width -
++              vertical_tab_strip_content_frame_thickness,
+           0, floating_corner_radius);
+     }
+     // Zen mode can hide the toolbar, leaving nothing above the strip to join.

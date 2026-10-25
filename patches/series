@@ -35,6 +35,7 @@ helium/ui/native-frame-materials-default.patch
 helium/ui/frame-content-edge.patch
 helium/ui/frame-thickness-caption.patch
 helium/ui/sidebar-content-edge.patch
+helium/ui/vts-collapse-fix.patch
 helium/ui/vertical-pinned-tab-rows.patch
 helium/ui/frame-thickness-restart.patch
 helium/ui/toolbar-top-bar-split.patch
