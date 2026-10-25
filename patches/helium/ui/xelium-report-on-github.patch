@@ -1,0 +1,386 @@
+--- a/components/new_or_sad_tab_strings.grdp
++++ b/components/new_or_sad_tab_strings.grdp
+@@ -24,26 +24,26 @@
+       <message name="IDS_SAD_TAB_RELOAD_LABEL" desc="Button label in the sad tab page for reloading a page." formatter_data="android_java">
+         Reload
+       </message>
+-      <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_TITLE" desc="Title of the dialog asking whether to send one or more Helium crash reports. The report count is shown for multiple reports. [ICU Syntax]">
+-        {COUNT, plural, =1 {Would you like to send a crash report?} other {Would you like to send # crash reports?}}
+-      </message>
+-      <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_DESCRIPTION" desc="Introductory paragraph shown when one or more Helium crash reports are available.">
+-        Helium closed unexpectedly. A crash report could help us fix the issue you ran into and prevent it from happening again.
+-      </message>
+-      <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_PRIVACY" desc="Paragraph warning that a crash report may contain sensitive information from Helium's memory.">
+-        A crash report may incidentally include some sensitive data present in Helium's memory at the time of crash.
+-      </message>
+-      <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_OPTIONAL" desc="Paragraph explaining that no crash report has been sent yet and that sending reports is optional.">
+-        Nothing has been sent yet. Sending a crash report is optional.
++      <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_TITLE" desc="Title of the dialog offering to report one or more crashes on the Xelium GitHub issue tracker. The crash count is shown for multiple crashes. [ICU Syntax]">
++        {COUNT, plural, =1 {Would you like to report this crash?} other {Would you like to report these # crashes?}}
++      </message>
++      <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_DESCRIPTION" desc="Introductory paragraph shown after Xelium crashes, offering to open the GitHub issue tracker.">
++        Xelium closed unexpectedly. Reporting the problem on GitHub helps us find and fix the cause.
++      </message>
++      <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_PRIVACY" desc="Paragraph explaining that no crash data is uploaded and that only what the user writes on GitHub is shared.">
++        Nothing is sent automatically. Only what you choose to write in the GitHub issue is shared.
++      </message>
++      <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_OPTIONAL" desc="Paragraph explaining that reporting is optional and that local crash reports are deleted either way.">
++        Reporting is optional. Your local crash reports will be deleted from this device either way.
+       </message>
+       <if expr="use_titlecase">
+-        <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_SEND_REPORT" desc="In Title Case: Button label for sending one or more crash reports. The report count is shown for multiple reports. [ICU Syntax]">
+-          {COUNT, plural, =1 {Send Report} other {Send # Reports}}
++        <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_REPORT_ON_GITHUB" desc="In Title Case: Button label that opens the Xelium GitHub issue tracker.">
++          Report on GitHub
+         </message>
+       </if>
+       <if expr="not use_titlecase">
+-        <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_SEND_REPORT" desc="Button label for sending one or more crash reports. The report count is shown for multiple reports. [ICU Syntax]">
+-          {COUNT, plural, =1 {Send report} other {Send # reports}}
++        <message name="IDS_HELIUM_CRASH_REPORTING_DIALOG_REPORT_ON_GITHUB" desc="Button label that opens the Xelium GitHub issue tracker.">
++          Report on GitHub
+         </message>
+       </if>
+       <if expr="is_android or is_ios">
+--- a/chrome/browser/ui/startup/helium_crash_dialog_controller.cc
++++ b/chrome/browser/ui/startup/helium_crash_dialog_controller.cc
+@@ -12,6 +12,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/i18n/message_formatter.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/no_destructor.h"
+ #include "chrome/app/vector_icons/vector_icons.h"
+ #include "chrome/browser/crash_upload_list/helium_crash_reporting.h"
+@@ -26,11 +27,17 @@
+ #include "ui/base/models/dialog_model.h"
+ #include "ui/base/models/dialog_model_host.h"
+ #include "ui/base/models/image_model.h"
++#include "ui/base/window_open_disposition.h"
+ #include "ui/color/color_id.h"
++#include "url/gurl.h"
+ 
+ namespace {
+ 
+ constexpr int kCrashDialogIconSize = 32;
++
++// Xelium builds must never send users to Helium's issue tracker.
++constexpr char kXeliumIssuesUrl[] =
++    "https://github.com/minervanet/xelium-macos/issues";
+ 
+ std::set<std::string>& ReservedReportIds() {
+   static base::NoDestructor<std::set<std::string>> reports;
+@@ -39,8 +46,10 @@
+ 
+ class HeliumCrashDialogDelegate : public ui::DialogModelDelegate {
+  public:
+-  explicit HeliumCrashDialogDelegate(std::vector<std::string> report_ids)
+-      : report_ids_(std::move(report_ids)) {}
++  HeliumCrashDialogDelegate(BrowserWindowInterface* browser,
++                            std::vector<std::string> report_ids)
++      : browser_(browser ? browser->GetWeakPtr() : nullptr),
++        report_ids_(std::move(report_ids)) {}
+ 
+   HeliumCrashDialogDelegate(const HeliumCrashDialogDelegate&) = delete;
+   HeliumCrashDialogDelegate& operator=(const HeliumCrashDialogDelegate&) =
+@@ -48,33 +57,39 @@
+   ~HeliumCrashDialogDelegate() override = default;
+ 
+   void OnDontAskAgain(const ui::Event&) {
+-    Resolve(/*upload=*/false);
++    Resolve();
+     helium::SetCrashReportingMode(helium::CrashReportingMode::kDisabled);
+     dialog_model()->host()->Close();
+   }
+ 
+-  void OnAccepted() { Resolve(/*upload=*/true); }
++  void OnAccepted() {
++    Resolve();
++    // Send the user to Xelium's issue tracker instead of uploading the crash
++    // report to Helium's servers.
++    if (browser_) {
++      browser_->OpenGURL(GURL(kXeliumIssuesUrl),
++                         WindowOpenDisposition::NEW_FOREGROUND_TAB);
++    }
++  }
+ 
+-  void OnDismissed() { Resolve(/*upload=*/false); }
++  void OnDismissed() { Resolve(); }
+ 
+  private:
+-  void Resolve(bool upload) {
++  // Crash reports are never uploaded by Xelium; they are always discarded
++  // locally once the dialog is resolved.
++  void Resolve() {
+     if (resolved_) {
+       return;
+     }
+     resolved_ = true;
+ 
+-    const bool can_upload = upload && !helium::UploadsDisabledByPolicy();
+     for (const std::string& report_id : report_ids_) {
+       ReservedReportIds().erase(report_id);
+-      if (can_upload) {
+-        crash_reporter::RequestSingleCrashUpload(report_id);
+-      } else {
+-        crash_reporter::DeleteCrashReport(report_id);
+-      }
++      crash_reporter::DeleteCrashReport(report_id);
+     }
+   }
+ 
++  const base::WeakPtr<BrowserWindowInterface> browser_;
+   const std::vector<std::string> report_ids_;
+   bool resolved_ = false;
+ };
+@@ -86,10 +101,11 @@
+ }
+ 
+ std::unique_ptr<ui::DialogModel> BuildCrashDialog(
++    BrowserWindowInterface* browser,
+     std::vector<std::string> report_ids) {
+   const size_t report_count = report_ids.size();
+-  auto delegate =
+-      std::make_unique<HeliumCrashDialogDelegate>(std::move(report_ids));
++  auto delegate = std::make_unique<HeliumCrashDialogDelegate>(
++      browser, std::move(report_ids));
+   HeliumCrashDialogDelegate* delegate_ptr = delegate.get();
+ 
+   return ui::DialogModel::Builder(std::move(delegate))
+@@ -114,12 +130,12 @@
+                          base::Unretained(delegate_ptr)),
+           ui::DialogModel::Button::Params().SetLabel(
+               l10n_util::GetStringUTF16(IDS_NO_THANKS)))
+-      .AddOkButton(base::BindOnce(&HeliumCrashDialogDelegate::OnAccepted,
+-                                  base::Unretained(delegate_ptr)),
+-                   ui::DialogModel::Button::Params().SetLabel(
+-                       FormatPluralString(
+-                           IDS_HELIUM_CRASH_REPORTING_DIALOG_SEND_REPORT,
+-                           report_count)))
++      .AddOkButton(
++          base::BindOnce(&HeliumCrashDialogDelegate::OnAccepted,
++                         base::Unretained(delegate_ptr)),
++          ui::DialogModel::Button::Params().SetLabel(
++              l10n_util::GetStringUTF16(
++                  IDS_HELIUM_CRASH_REPORTING_DIALOG_REPORT_ON_GITHUB)))
+       .OverrideDefaultButton(ui::mojom::DialogButton::kNone)
+       .OverrideShowCloseButton(/*show_close_button=*/true)
+       .SetCloseActionCallback(
+@@ -140,7 +156,8 @@
+   }
+ 
+   if (helium::UploadsDisabledByPolicy() ||
+-      helium::GetCrashReportingMode() != helium::CrashReportingMode::kAsk) {
++      helium::GetCrashReportingMode() ==
++          helium::CrashReportingMode::kDisabled) {
+     return;
+   }
+ 
+@@ -158,5 +175,6 @@
+     return;
+   }
+ 
+-  chrome::ShowBrowserModal(browser, BuildCrashDialog(std::move(report_ids)));
++  chrome::ShowBrowserModal(
++      browser, BuildCrashDialog(browser, std::move(report_ids)));
+ }
+--- a/components/crash/core/app/crash_reporter_client.cc
++++ b/components/crash/core/app/crash_reporter_client.cc
+@@ -146,6 +146,13 @@
+ #endif
+ 
+ std::string CrashReporterClient::GetUploadUrl() {
++  // Xelium never uploads crash reports. Crashpad only starts its upload thread
++  // when this URL is non-empty, so returning an empty string keeps crash data
++  // on the machine even if upload consent is enabled. The crash dialog offers
++  // to open the project's GitHub issue tracker instead.
++  //
++  // The `--custom-crash-server-url` switch is kept for local testing only and
++  // is never set by the browser itself.
+ #if !BUILDFLAG(IS_WIN)
+   const auto* command_line = base::CommandLine::ForCurrentProcess();
+   if (command_line->HasSwitch(kCrashServerUrlCommandLine)) {
+@@ -153,11 +160,7 @@
+   }
+ #endif
+ 
+-#if defined(OFFICIAL_BUILD)
+-  return "https://crash.helium.computer/crash";
+-#else
+   return std::string();
+-#endif
+ }
+ 
+ bool CrashReporterClient::ShouldRateLimitUploads() {
+--- a/chrome/browser/crash_upload_list/helium_crash_reporting.cc
++++ b/chrome/browser/crash_upload_list/helium_crash_reporting.cc
+@@ -109,11 +109,10 @@
+       DeletePendingReports(/*include_explicitly_requested=*/true);
+       return;
+     case CrashReportingMode::kAsk:
+-      // Leave reports pending so the crash dialog can offer them.
+-      return;
+     case CrashReportingMode::kAutomatic:
+-      // Allow Crashpad to upload pending reports without prompting.
+-      crash_reporter::SetUploadConsentFromUser(true);
++      // Xelium never uploads crash reports, so both prompting modes keep
++      // reports pending only so the GitHub reporting dialog can offer them.
++      // Upload consent stays off in every mode.
+       return;
+   }
+ }
+@@ -141,9 +140,7 @@
+ 
+   local_state->SetInteger(prefs::kHeliumCrashReportingMode,
+                           static_cast<int>(mode));
+-  if (mode == CrashReportingMode::kAutomatic) {
+-    crash_reporter::SetUploadConsentFromUser(true);
+-  }
++  // Xelium never uploads crash reports, so no mode re-enables upload consent.
+ }
+ 
+ }  // namespace helium
+--- a/chrome/browser/ui/webui/crashes/crashes_ui.cc
++++ b/chrome/browser/ui/webui/crashes/crashes_ui.cc
+@@ -19,7 +19,6 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/crash_upload_list/crash_upload_list.h"
+-#include "chrome/browser/crash_upload_list/helium_crash_reporting.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/signin/identity_manager_factory.h"
+ #include "chrome/common/pref_names.h"
+@@ -181,11 +180,11 @@
+ }
+ 
+ void CrashesDOMHandler::UpdateUI() {
+-  const helium::CrashReportingMode crash_reporting_mode =
+-      helium::GetCrashReportingMode();
+-  bool crash_reporting_enabled =
+-      crash_reporting_mode == helium::CrashReportingMode::kAutomatic &&
+-      !helium::UploadsDisabledByPolicy();
++  // Xelium never uploads crash reports, so reporting is always unavailable
++  // here. Dumps can still be listed locally and reported on GitHub from the
++  // crash dialog.
++  const bool crash_reporting_enabled = false;
++  const bool allow_manual_uploads = false;
+ 
+   bool system_crash_reporter = false;
+ #if BUILDFLAG(IS_CHROMEOS)
+@@ -202,18 +201,6 @@
+             .email);
+   }
+ 
+-  bool manual_uploads_supported = false;
+-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_ANDROID)
+-  manual_uploads_supported = true;
+-#endif
+-  bool allow_manual_uploads =
+-      manual_uploads_supported &&
+-      crash_reporting_mode != helium::CrashReportingMode::kDisabled &&
+-      !helium::UploadsDisabledByPolicy();
+-
+-  // Show crash reports regardless of |crash_reporting_enabled| when it is
+-  // possible to manually upload reports.
+   base::ListValue crash_list;
+   crash_reporter::UploadListToValue(upload_list_.get(), &crash_list);
+ 
+@@ -232,16 +219,10 @@
+ }
+ 
+ void CrashesDOMHandler::HandleRequestSingleCrashUpload(
+-    const base::ListValue& args) {
+-  const helium::CrashReportingMode crash_reporting_mode =
+-      helium::GetCrashReportingMode();
+-  if (crash_reporting_mode == helium::CrashReportingMode::kDisabled ||
+-      helium::UploadsDisabledByPolicy()) {
+-    return;
+-  }
+-
+-  std::string local_id = args[0].GetString();
+-  upload_list_->RequestSingleUploadAsync(local_id);
++    const base::ListValue& /*args*/) {
++  // Xelium never uploads crash reports; uploading is not implemented. The
++  // crash dialog offers to open the project's GitHub issue tracker instead.
++  return;
+ }
+ 
+ }  // namespace
+--- a/chrome/browser/ui/webui/settings/helium_crash_reporting_handler.cc
++++ b/chrome/browser/ui/webui/settings/helium_crash_reporting_handler.cc
+@@ -50,9 +50,15 @@
+ base::DictValue HeliumCrashReportingHandler::CreateState() const {
+   CHECK(pref_member_);
+   const bool managed = helium::UploadsDisabledByPolicy();
+-  const helium::CrashReportingMode mode =
++  helium::CrashReportingMode mode =
+       managed ? helium::CrashReportingMode::kDisabled
+               : helium::GetCrashReportingMode();
++
++  // Xelium never uploads crash reports, so "send automatically" is no longer
++  // offered. Present a stored automatic selection as "ask after a crash".
++  if (mode == helium::CrashReportingMode::kAutomatic) {
++    mode = helium::CrashReportingMode::kAsk;
++  }
+ 
+   return base::DictValue()
+       .Set("mode", static_cast<int>(mode))
+--- a/chrome/browser/resources/settings/privacy_page/services_page.ts
++++ b/chrome/browser/resources/settings/privacy_page/services_page.ts
+@@ -71,10 +71,6 @@
+           {
+             value: CrashReportingMode.ASK,
+             name: loadTimeData.getString('heliumCrashReportingAsk'),
+-          },
+-          {
+-            value: CrashReportingMode.AUTOMATIC,
+-            name: loadTimeData.getString('heliumCrashReportingAutomatic'),
+           },
+         ],
+       },
+--- a/components/crash/core/browser/resources/crashes.ts
++++ b/components/crash/core/browser/resources/crashes.ts
+@@ -205,7 +205,9 @@
+ }
+ 
+ /**
+- * Opens a new tab/window to report the crash to crbug.
++ * Opens a new tab/window to report the crash on the project's issue tracker.
++ * Crash reports are never uploaded automatically; the user decides what to
++ * share in the issue itself.
+  * @param The crash report ID.
+  * @param The OS name.
+  * @param The product version.
+@@ -213,17 +215,15 @@
+ function fileBug(crashId: string, os: string, version: string) {
+   const commentLines = [
+     `Crash ID: ${crashId}`,
+-    'IMPORTANT: Your crash has already been reported to our crash system. ' +
+-        'Please file this issue only if you can provide more information ' +
+-        'about it.',
++    'IMPORTANT: Crash reports are never uploaded automatically. ' +
++        'Please include anything else that might help reproduce the crash.',
+   ];
+   const params: {[key: string]: string} = {
+-    template: 'bug-report.yml',
+     version,
+     os,
+     additional: commentLines.join('\n'),
+   };
+-  let href = 'https://github.com/imputnet/helium/issues/new';
++  let href = 'https://github.com/minervanet/xelium-macos/issues/new';
+   for (const param in params) {
+     href = appendParam(href, param, params[param]!);
+   }
+--- a/chrome/app/settings_strings.grdp
++++ b/chrome/app/settings_strings.grdp
+@@ -1723,7 +1723,7 @@
+       Crash reporting
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_CRASH_REPORTING_DESCRIPTION" desc="Description of the setting that controls crash reporting">
+-      Choose whether Helium can ask to send crash reports or send them automatically. Disabling reports will delete all pending reports.
++      Choose whether Xelium offers to report crashes on GitHub. Crash data is never uploaded automatically. Disabling reports will delete all pending reports.
+     </message>
+     <message name="IDS_SETTINGS_HELIUM_CRASH_REPORTING_DISABLED" desc="Crash reporting option that disables prompts and submissions">
+       Disabled

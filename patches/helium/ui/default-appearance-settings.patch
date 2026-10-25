@@ -1,0 +1,64 @@
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -94,9 +94,11 @@
+   registry->RegisterTimePref(prefs::kDefaultBrowserFirstShownTime,
+                              base::Time());
+   registry->RegisterBooleanPref(prefs::kHeliumDefaultBrowserRejected, false);
+-  registry->RegisterIntegerPref(prefs::kHeliumUiDensity,
+-                                static_cast<int>(HeliumUiDensity::kStandard));
+-  registry->RegisterIntegerPref(prefs::kHeliumRoundedFrameThickness, 1);
++  // Xelium defaults: comfortable interface size and an 8px rounded frame.
++  registry->RegisterIntegerPref(
++      prefs::kHeliumUiDensity,
++      static_cast<int>(HeliumUiDensity::kComfortable));
++  registry->RegisterIntegerPref(prefs::kHeliumRoundedFrameThickness, 8);
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+   registry->RegisterTimePref(prefs::kPdfInfoBarLastShown, base::Time());
+@@ -131,8 +133,9 @@
+ 
+   registry->RegisterBooleanPref(prefs::kNewTabNextToActive, false);
+ 
+-  registry->RegisterBooleanPref(prefs::kTabCyclingMRU, false);
+-  registry->RegisterBooleanPref(prefs::kVisualTabSwitcher, false);
++  // Xelium defaults: cycle tabs in MRU order and show the visual tab switcher.
++  registry->RegisterBooleanPref(prefs::kTabCyclingMRU, true);
++  registry->RegisterBooleanPref(prefs::kVisualTabSwitcher, true);
+   registry->RegisterBooleanPref(prefs::kVisualTabSwitcherList, false);
+ 
+   registry->RegisterBooleanPref(prefs::kShiftRightClickContextMenu, true);
+@@ -149,7 +152,8 @@
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumShowProgressBar, true);
+ 
+-  registry->RegisterIntegerPref(prefs::kHeliumVerticalPinnedTabsPerRow, 0);
++  // Xelium default: at most four pinned tabs per row.
++  registry->RegisterIntegerPref(prefs::kHeliumVerticalPinnedTabsPerRow, 4);
+ 
+   registry->RegisterBooleanPref(prefs::kHomePageIsNewTabPage, true,
+                                 pref_registration_flags);
+--- a/chrome/browser/ui/tabs/tab_strip_prefs.cc
++++ b/chrome/browser/ui/tabs/tab_strip_prefs.cc
+@@ -32,14 +32,17 @@
+   registry->RegisterIntegerPref(prefs::kVerticalTabsUncollapsedWidth,
+                                 kVerticalTabStripDefaultUncollapsedWidth);
+ 
+-  registry->RegisterIntegerPref(prefs::kHeliumLayout,
+-                                std::to_underlying(HeliumLayoutType::kClassic));
++  // Xelium defaults: vertical tab strip with frameless mode on, the sidebar
++  // pinned visible, and the address bar hosted in the sidebar.
++  registry->RegisterIntegerPref(
++      prefs::kHeliumLayout,
++      std::to_underlying(HeliumLayoutType::kVertical));
+   registry->RegisterBooleanPref(prefs::kHeliumVerticalRightAligned, false);
+-  registry->RegisterBooleanPref(prefs::kHeliumZenMode, false);
+-  registry->RegisterBooleanPref(prefs::kHeliumZenModeSidebarPinned, false);
++  registry->RegisterBooleanPref(prefs::kHeliumZenMode, true);
++  registry->RegisterBooleanPref(prefs::kHeliumZenModeSidebarPinned, true);
+   registry->RegisterBooleanPref(prefs::kHeliumZenModeTopChromePinned, false);
+   registry->RegisterBooleanPref(prefs::kHeliumVerticalAddressBarInSidebar,
+-                                false);
++                                true);
+ }
+ 
+ void MigrateHoverCardMemoryPref(PrefService* local_prefs) {

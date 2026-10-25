@@ -1,0 +1,126 @@
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -2281,16 +2281,12 @@
+   sidebar_controls_host_ = host;
+   transferred_controls_state_.clear();
+ 
++  // Navigation buttons and the address bar move into the sidebar. The
++  // remaining controls stay in the top bar, right-aligned at the trailing
++  // end via the layout's main-axis alignment (see UpdateToolbarLayout); they
++  // are not reparented, so no restore bookkeeping is needed for them.
+   views::View* views_to_transfer[] = {
+-      back_,
+-      forward_,
+-      reload_,
+-      home_,
+-      location_bar_view_,
+-      extensions_container_,
+-      pinned_toolbar_actions_container_,
+-      avatar_,
+-      app_menu_button_};
++      back_, forward_, reload_, home_, location_bar_view_};
+ 
+   for (views::View* view : views_to_transfer) {
+     if (view && view->parent() == this) {
+@@ -2305,8 +2301,7 @@
+   }
+ 
+   sidebar_controls_host_->AttachToolbarControls(
+-      app_menu_button_, avatar_, extensions_container_,
+-      pinned_toolbar_actions_container_, back_, forward_, reload_, home_,
++      nullptr, nullptr, nullptr, nullptr, back_, forward_, reload_, home_,
+       location_bar_view_);
+ 
+   OnShowMediaButtonChanged();
+@@ -2375,19 +2370,27 @@
+         view->SetVisible(false);
+       }
+     };
++    // Navigation buttons and the location bar live in the sidebar now.
+     hide_if_child(back_);
+     hide_if_child(forward_);
+     hide_if_child(reload_);
+     hide_if_child(home_);
+-    hide_if_child(avatar_);
+-    hide_if_child(extensions_container_);
+-    hide_if_child(pinned_toolbar_actions_container_);
+-    hide_if_child(app_menu_button_);
+     hide_if_child(vertical_tabs_collapse_button_);
+     hide_if_child(dynamic_new_tab_button_);
+     hide_if_child(overflow_button_);
+-    return;
+-  }
++
++    // Pack every remaining visible control (extensions, pinned actions,
++    // avatar, app menu, split tabs, and any other visible control) against
++    // the right end corner. A spacer-based approach does not work here:
++    // FlexLayout excludes zero-preferred-size views from space allocation,
++    // so an empty spacer never expands.
++    static_cast<ResponsiveToolbarLayout*>(layout_manager_.get())
++        ->SetMainAxisAlignment(views::LayoutAlignment::kEnd);
++    return;
++  }
++
++  static_cast<ResponsiveToolbarLayout*>(layout_manager_.get())
++      ->SetMainAxisAlignment(views::LayoutAlignment::kStart);
+ 
+   if (vertical_tabs_collapse_button_) {
+     const size_t target_index =
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.cc
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.cc
+@@ -143,8 +143,12 @@
+   const int horizontal_padding =
+       GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
+ 
++  // Slim top margin so the gap above the navigation row matches the thin
++  // margin at the bottom of the sidebar, with a little room to breathe.
++  // Only affects sidebar-address-bar mode: the header is hidden (and its
++  // margins collapse) otherwise.
+   SetProperty(views::kMarginsKey,
+-              gfx::Insets::TLBR(4, horizontal_padding, 4, horizontal_padding));
++              gfx::Insets::TLBR(5, horizontal_padding, 4, horizontal_padding));
+   SetProperty(views::kFlexBehaviorKey,
+               views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
+                                        views::MaximumFlexSizeRule::kPreferred));
+@@ -303,7 +307,12 @@
+     extensions_container_->ReorderAllChildViews();
+   }
+ 
+-  // Push navigation and pinned actions to the trailing edge.
++  // Push navigation and pinned actions to the trailing edge when a leading
++  // group exists. With no leading controls (e.g. in sidebar-address-bar mode
++  // where extensions, avatar and the app menu stay in the top bar), the
++  // spacer moves to the end so the navigation buttons stay left-aligned.
++  const bool has_leading_controls =
++      app_menu_button_ || avatar_ || extensions_container_;
+   reparent_view(spacer_);
+   spacer_->SetProperty(
+       views::kFlexBehaviorKey,
+@@ -311,6 +320,10 @@
+                                views::MaximumFlexSizeRule::kUnbounded)
+           .WithOrder(3)
+           .WithWeight(1));
++  if (!has_leading_controls && top_controls_container_) {
++    top_controls_container_->ReorderChildView(
++        spacer_, top_controls_container_->children().size() - 1);
++  }
+ 
+   // Trailing controls: pinned actions and navigation.
+   if (pinned_toolbar_actions_container_) {
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -917,6 +917,14 @@
+             : 1.0f - top_chrome_ratio;
+     top_padding = base::ClampRound(
+         GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius) * ratio);
++    // When the sidebar header is shown (address bar in the sidebar), the
++    // header carries its own side margins, so unlike full-bleed tabs it
++    // never paints into the panel's rounded top corners. The corner
++    // clearance above is unnecessary there; dropping it brings the gap
++    // above the navigation row in line with the thin margin at the bottom.
++    if (browser->IsVerticalAddressBarInSidebar()) {
++      top_padding = 0;
++    }
+   }
+ 
+   interior_margin_ = gfx::Insets::TLBR(top_padding, 0, padding, 0);

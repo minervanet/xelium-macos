@@ -1,0 +1,173 @@
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.cc
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.cc
+@@ -256,7 +256,8 @@
+     ToolbarButton* forward,
+     ReloadButton* reload,
+     HomeButton* home,
+-    LocationBarView* location_bar) {
++    LocationBarView* location_bar,
++    ToolbarButton* sidebar_pin_button) {
+   app_menu_button_ = app_menu_button;
+   avatar_ = avatar;
+   extensions_container_ = extensions_container;
+@@ -266,6 +267,7 @@
+   reload_ = reload;
+   home_ = home;
+   location_bar_view_ = location_bar;
++  sidebar_pin_button_ = sidebar_pin_button;
+ 
+   auto reparent_view = [this](views::View* view) {
+     if (!view) {
+@@ -351,6 +353,17 @@
+     home_->SetProperty(views::kFlexBehaviorKey, core_btn_flex);
+   }
+ 
++  // Sidebar pin button leads the navigation row, before the nav buttons.
++  if (sidebar_pin_button_) {
++    reparent_view(sidebar_pin_button_);
++    sidebar_pin_button_->SetProperty(
++        views::kFlexBehaviorKey,
++        views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
++                                 views::MaximumFlexSizeRule::kPreferred)
++            .WithOrder(0));
++    top_controls_container_->ReorderChildView(sidebar_pin_button_, 0);
++  }
++
+   // The address bar occupies the bottom row.
+   if (location_bar_view_) {
+     if (location_bar_view_->parent() != this) {
+@@ -377,6 +390,7 @@
+   reload_ = nullptr;
+   home_ = nullptr;
+   location_bar_view_ = nullptr;
++  sidebar_pin_button_ = nullptr;
+ 
+   if (top_controls_container_) {
+     top_controls_container_->SetVisible(false);
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.h
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.h
+@@ -45,7 +45,8 @@
+       ToolbarButton* forward,
+       ReloadButton* reload,
+       HomeButton* home,
+-      LocationBarView* location_bar);
++      LocationBarView* location_bar,
++      ToolbarButton* sidebar_pin_button);
+   void ClearToolbarControls();
+ 
+   LocationBarView* location_bar_view() const { return location_bar_view_; }
+@@ -86,6 +87,7 @@
+   raw_ptr<ReloadButton> reload_ = nullptr;
+   raw_ptr<HomeButton> home_ = nullptr;
+   raw_ptr<LocationBarView> location_bar_view_ = nullptr;
++  raw_ptr<ToolbarButton> sidebar_pin_button_ = nullptr;
+ 
+   bool is_collapsed_ = false;
+ };
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -540,6 +540,18 @@
+ 
+   // Always add children in order from left to right, for accessibility.
+ 
++  sidebar_pin_button_ = AddChildView(std::make_unique<ToolbarButton>(
++      base::BindRepeating(&ToolbarView::SidebarPinButtonPressed,
++                          base::Unretained(this))));
++  sidebar_pin_button_->SetVectorIcon(views::kSidebarLeftIcon);
++  sidebar_pin_button_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
++  const std::u16string sidebar_pin_tooltip =
++      l10n_util::GetStringUTF16(IDS_SETTINGS_ZEN_PIN_SIDEBAR);
++  sidebar_pin_button_->SetTooltipText(sidebar_pin_tooltip);
++  sidebar_pin_button_->GetViewAccessibility().SetName(sidebar_pin_tooltip);
++  sidebar_pin_button_->SetVisible(false);
++  // No element ID: inert to the toolbar controller and overflow logic.
++
+   vertical_tabs_collapse_button_ = AddChildView(std::make_unique<ToolbarButton>(
+       base::BindRepeating(&ToolbarView::VerticalTabsCollapseButtonPressed,
+                           base::Unretained(this))));
+@@ -1832,6 +1844,12 @@
+   chrome::NewTab(browser_, NewTabTypes::kNewTabButton);
+ }
+ 
++void ToolbarView::SidebarPinButtonPressed(const ui::Event& event) {
++  if (browser_view_) {
++    browser_view_->ToggleZenModeSideChrome();
++  }
++}
++
+ void ToolbarView::VerticalTabsCollapseButtonPressed(const ui::Event& event) {
+   if (browser_view_->IsVerticalAddressBarInSidebar()) {
+     return;
+@@ -2279,6 +2297,9 @@
+   }
+ 
+   sidebar_controls_host_ = host;
++  if (sidebar_pin_button_) {
++    sidebar_pin_button_->SetVisible(true);
++  }
+   transferred_controls_state_.clear();
+ 
+   // Navigation buttons and the address bar move into the sidebar. The
+@@ -2286,7 +2307,7 @@
+   // end via the layout's main-axis alignment (see UpdateToolbarLayout); they
+   // are not reparented, so no restore bookkeeping is needed for them.
+   views::View* views_to_transfer[] = {
+-      back_, forward_, reload_, home_, location_bar_view_};
++      sidebar_pin_button_, back_, forward_, reload_, home_, location_bar_view_};
+ 
+   for (views::View* view : views_to_transfer) {
+     if (view && view->parent() == this) {
+@@ -2302,7 +2323,7 @@
+ 
+   sidebar_controls_host_->AttachToolbarControls(
+       nullptr, nullptr, nullptr, nullptr, back_, forward_, reload_, home_,
+-      location_bar_view_);
++      location_bar_view_, sidebar_pin_button_);
+ 
+   OnShowMediaButtonChanged();
+   UpdateToolbarLayout();
+@@ -2315,6 +2336,9 @@
+   }
+   VerticalTabStripHeaderView* host = sidebar_controls_host_;
+   sidebar_controls_host_ = nullptr;
++  if (sidebar_pin_button_) {
++    sidebar_pin_button_->SetVisible(false);
++  }
+   host->ClearToolbarControls();
+ 
+   // Restore in ascending original index order.
+@@ -2384,6 +2408,13 @@
+     // the right end corner. A spacer-based approach does not work here:
+     // FlexLayout excludes zero-preferred-size views from space allocation,
+     // so an empty spacer never expands.
++    // Mirror the sidebar glyph so its straight edge faces the tab strip.
++    if (sidebar_pin_button_) {
++      sidebar_pin_button_->SetVectorIcon(IsVerticalTabsRightAligned()
++                                             ? views::kSidebarRightIcon
++                                             : views::kSidebarLeftIcon);
++    }
++
+     static_cast<ResponsiveToolbarLayout*>(layout_manager_.get())
+         ->SetMainAxisAlignment(views::LayoutAlignment::kEnd);
+     return;
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -425,6 +425,7 @@
+ 
+   void NewTabButtonPressed(const ui::Event& event);
+   void VerticalTabsCollapseButtonPressed(const ui::Event& event);
++  void SidebarPinButtonPressed(const ui::Event& event);
+ 
+   void InitGlicContainer();
+ 
+@@ -590,6 +591,10 @@
+   bool should_show_glic_button_ = false;
+   bool should_show_glic_actor_ = false;
+   raw_ptr<VerticalTabStripHeaderView> sidebar_controls_host_ = nullptr;
++  // Button shown at the leading end of the sidebar navigation row while the
++  // sidebar hosts the navigation buttons and the address bar. Toggles
++  // "always show the sidebar" (zen side-chrome pin).
++  raw_ptr<ToolbarButton> sidebar_pin_button_ = nullptr;
+ 
+   struct TransferredControlState {
+     raw_ptr<views::View> view = nullptr;

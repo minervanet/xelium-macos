@@ -37,7 +37,13 @@ helium/ui/frame-thickness-caption.patch
 helium/ui/sidebar-content-edge.patch
 helium/ui/vertical-pinned-tab-rows.patch
 helium/ui/frame-thickness-restart.patch
+helium/ui/toolbar-top-bar-split.patch
+helium/ui/zen-app-menu-reveal.patch
+helium/ui/sidebar-pin-button.patch
 helium/core/visual-tab-switcher.patch
 helium/ui/visual-tab-switcher.patch
 helium/settings/visual-tab-switcher.patch
 z-xelium-rebrand.patch
+helium/ui/default-appearance-settings.patch
+helium/ui/xelium-report-on-github.patch
+helium/ui/xelium-bundled-extensions.patch

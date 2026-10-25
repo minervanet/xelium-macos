@@ -1,0 +1,85 @@
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -2218,7 +2218,7 @@
+       toolbar_button_provider ? toolbar_button_provider->GetAppMenuControl()
+                               : nullptr;
+   if (app_menu_control && app_menu_control->IsMenuShowing()) {
+-    if (IsVerticalAddressBarInSidebar()) {
++    if (IsAppMenuInSidebar()) {
+       reveal_side = true;
+     } else {
+       reveal_top = true;
+@@ -2418,12 +2418,21 @@
+ 
+ void BrowserView::AppMenuShown() {
+   if (zen_mode_enabled_) {
+-    if (IsVerticalAddressBarInSidebar()) {
++    if (IsAppMenuInSidebar()) {
+       UpdateZenModeReveal(/*reveal_top=*/false, /*reveal_side=*/true);
+     } else {
+       UpdateZenModeReveal(/*reveal_top=*/true, /*reveal_side=*/false);
+     }
+   }
++}
++
++bool BrowserView::IsAppMenuInSidebar() const {
++  if (vertical_tab_strip_region_view_) {
++    if (auto* header = vertical_tab_strip_region_view_->header_view()) {
++      return header->IsHostingAppMenuButton();
++    }
++  }
++  return false;
+ }
+ 
+ void BrowserView::AppMenuClosed() {
+@@ -5105,6 +5114,21 @@
+   // Collapse zen mode chrome when the window is deactivated.
+   if (!active && zen_mode_enabled_) {
+     UpdateZenModeReveal(/*reveal_top=*/false, /*reveal_side=*/false);
++  }
++
++  // Recompute the reveal state when the window re-activates. Panels and
++  // bubbles dismissed without cursor movement (e.g. via the keyboard) leave
++  // no other signal; without this the chrome would stay stuck visible until
++  // the next mouse move. Deferred so an in-progress teardown (async native
++  // and widget destruction) has settled before the open-bubble scan runs;
++  // recomputing inline would observe the dying bubble as still open and
++  // stick the chrome visible.
++  if (active && zen_mode_enabled_) {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(&BrowserView::UpdateZenModeRevealFromCursor,
++                       weak_ptr_factory_.GetWeakPtr()),
++        base::Milliseconds(100));
+   }
+ 
+   ExtensionKeybindingRegistryViews::From(browser_)->OnHostActivationChanged(
+--- a/chrome/browser/ui/views/frame/browser_view.h
++++ b/chrome/browser/ui/views/frame/browser_view.h
+@@ -985,6 +985,10 @@
+   bool IsPointInZenSideChromeBounds(const gfx::Point& point) const;
+   bool HasOpenBubbleFromTopContainer() const;
+   bool HasOpenBubbleFromSidebar() const;
++  // Returns whether the app menu button currently lives in the sidebar
++  // (rather than the top bar). Used to decide which chrome zen-mode reveal
++  // must keep visible while the app menu is open.
++  bool IsAppMenuInSidebar() const;
+   bool GetCursorLocationInBrowserView(gfx::Point* cursor_location) const;
+ 
+   // Callback for the loading animation(s) associated with this view.
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.h
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_header_view.h
+@@ -50,6 +50,13 @@
+ 
+   LocationBarView* location_bar_view() const { return location_bar_view_; }
+ 
++  // Returns whether the sidebar header currently hosts the app menu button.
++  // The menu can stay in the top bar while the navigation buttons and the
++  // address bar move into the sidebar (see
++  // ToolbarView::SetSidebarControlsHost); zen-mode reveal must then keep the
++  // top chrome visible while the menu is open instead of the side chrome.
++  bool IsHostingAppMenuButton() const { return app_menu_button_ != nullptr; }
++
+   void SetCollapsed(bool collapsed);
+ 
+   bool HasOpenBubbleOrMenu() const;
