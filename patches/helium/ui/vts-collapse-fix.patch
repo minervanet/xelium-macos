@@ -1,3 +1,207 @@
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -72,10 +72,13 @@
+   // TODO(crbug.com/465832180): Replace constant based width final max width for
+   // view.
+   static constexpr int kUncollapsedMaxWidth = 400;
+-  static constexpr int kCollapsedWidth = 42;
++  // The collapsed width keeps the collapsed tab square: it is the vertical tab
++  // row height plus the strip's horizontal padding on both sides. It follows
++  // the UI density, so comfortable mode gets a wider strip (48) than standard
++  // mode (42).
++  static int CollapsedWidth();
+   // TODO(crbug.com/465833741): Determine snapping behavior.
+-  static constexpr int kCollapseSnapWidth =
+-      (kUncollapsedMinWidth + kCollapsedWidth) / 2;
++  static int CollapseSnapWidth();
+ 
+   explicit VerticalTabStripRegionView(
+       tabs::VerticalTabStripStateController* state_controller,
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -492,9 +492,21 @@
+ gfx::Size VerticalTabStripRegionView::GetMinimumSize() const {
+   auto min_size = BaseTabStripRegionView::GetMinimumSize();
+   min_size.set_width((state_controller_->IsCollapsed() || IsAnimatingSize())
+-                         ? kCollapsedWidth
++                         ? CollapsedWidth()
+                          : kUncollapsedMinWidth);
+   return min_size;
++}
++
++// static
++int VerticalTabStripRegionView::CollapsedWidth() {
++  return GetLayoutConstant(LayoutConstant::kVerticalTabHeight) +
++         2 * GetLayoutConstant(
++                 LayoutConstant::kVerticalTabStripHorizontalPadding);
++}
++
++// static
++int VerticalTabStripRegionView::CollapseSnapWidth() {
++  return (kUncollapsedMinWidth + CollapsedWidth()) / 2;
+ }
+ 
+ gfx::Size VerticalTabStripRegionView::CalculatePreferredSize(
+@@ -508,11 +520,11 @@
+       std::max(target_collapse_state_.uncollapsed_width,
+                kUncollapsedMinWidth);
+   const int expand_amount =
+-      std::max(0, target_uncollapsed_width - kCollapsedWidth);
++      std::max(0, target_uncollapsed_width - CollapsedWidth());
+   const double expand_percent =
+       *controller->GetCurrentValue(TabStripAnimations::kVerticalTabStrip,
+                                    TabStripAnimations::kTabStripWidth);
+-  size.set_width(kCollapsedWidth +
++  size.set_width(CollapsedWidth() +
+                  (motion == TabStripAnimations::kExpand
+                       ? std::floor<double>
+                       : std::ceil<double>)(expand_amount * expand_percent));
+@@ -718,7 +730,7 @@
+   }
+ 
+   const int min_uncollapsed = kUncollapsedMinWidth;
+-  const int collapse_snap_width = (min_uncollapsed + kCollapsedWidth) / 2;
++  const int collapse_snap_width = CollapseSnapWidth();
+ 
+   tabs::VerticalTabStripState new_state;
+   const bool can_collapse =
+@@ -768,7 +780,7 @@
+                             : "VerticalTabs_TabStrip_ResizeToUncollapsed"));
+     base::UmaHistogramCounts1000(
+         "Tabs.VerticalTabs.TabStripSize",
+-        new_state.collapsed ? kCollapsedWidth : new_state.uncollapsed_width);
++        new_state.collapsed ? CollapsedWidth() : new_state.uncollapsed_width);
+   }
+ 
+   target_collapse_state_ = new_state;
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view_browsertest.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view_browsertest.cc
+@@ -249,7 +249,7 @@
+   {
+     const int resize_amount = -120;
+     const int resize_width = initial_width + resize_amount;
+-    ASSERT_LT(VerticalTabStripRegionView::kCollapseSnapWidth, resize_width);
++    ASSERT_LT(VerticalTabStripRegionView::CollapseSnapWidth(), resize_width);
+     ASSERT_LT(resize_width, VerticalTabStripRegionView::kUncollapsedMinWidth);
+ 
+     region_view()->OnResize(resize_amount, false);
+@@ -268,7 +268,7 @@
+   {
+     const int resize_amount = -180;
+     const int resize_width = initial_width + resize_amount;
+-    ASSERT_LE(resize_width, VerticalTabStripRegionView::kCollapseSnapWidth);
++    ASSERT_LE(resize_width, VerticalTabStripRegionView::CollapseSnapWidth());
+ 
+     region_view()->OnResize(resize_amount, false);
+     EXPECT_TRUE(region_view()->target_collapse_state_for_testing().collapsed);
+@@ -285,7 +285,7 @@
+     // When the animation completes, the preferred width will be the collapsed
+     // width.
+     ASSERT_TRUE(base::test::RunUntil([&]() { return !IsAnimatingSize(); }));
+-    EXPECT_EQ(VerticalTabStripRegionView::kCollapsedWidth,
++    EXPECT_EQ(VerticalTabStripRegionView::CollapsedWidth(),
+               region_view()->GetPreferredSize().width());
+   }
+ }
+@@ -341,7 +341,7 @@
+ }
+ 
+ IN_PROC_BROWSER_TEST_F(VerticalTabStripRegionViewTest, ResizeViewBigger) {
+-  const int initial_width = VerticalTabStripRegionView::kCollapsedWidth;
++  const int initial_width = VerticalTabStripRegionView::CollapsedWidth();
+ 
+   // Start this test from the collapsed state.
+   state_controller()->RequestCollapse(true);
+@@ -360,7 +360,7 @@
+   {
+     const int resize_amount = 10;
+     const int resize_width = initial_width + resize_amount;
+-    ASSERT_LE(resize_width, VerticalTabStripRegionView::kCollapseSnapWidth);
++    ASSERT_LE(resize_width, VerticalTabStripRegionView::CollapseSnapWidth());
+ 
+     region_view()->OnResize(resize_amount, false);
+     EXPECT_EQ(initial_width, region_view()->GetPreferredSize().width());
+@@ -376,7 +376,7 @@
+   {
+     const int resize_amount = 50;
+     const int resize_width = initial_width + resize_amount;
+-    ASSERT_LT(VerticalTabStripRegionView::kCollapseSnapWidth, resize_width);
++    ASSERT_LT(VerticalTabStripRegionView::CollapseSnapWidth(), resize_width);
+     ASSERT_LT(resize_width, VerticalTabStripRegionView::kUncollapsedMinWidth);
+ 
+     region_view()->OnResize(resize_amount, false);
+@@ -475,7 +475,7 @@
+   // should be restored to the state controller's uncollapsed width.
+   PressCollapseButton();
+   ASSERT_TRUE(base::test::RunUntil([&]() { return !IsAnimatingSize(); }));
+-  EXPECT_EQ(VerticalTabStripRegionView::kCollapsedWidth,
++  EXPECT_EQ(VerticalTabStripRegionView::CollapsedWidth(),
+             region_view()->GetPreferredSize().width());
+   PressCollapseButton();
+   ASSERT_TRUE(base::test::RunUntil([&]() { return !IsAnimatingSize(); }));
+@@ -486,7 +486,7 @@
+   {
+     const int resize_amount = -120;
+     const int resize_width = last_uncollapsed_width + resize_amount;
+-    ASSERT_LT(VerticalTabStripRegionView::kCollapseSnapWidth, resize_width);
++    ASSERT_LT(VerticalTabStripRegionView::CollapseSnapWidth(), resize_width);
+     ASSERT_LT(resize_width, VerticalTabStripRegionView::kUncollapsedMinWidth);
+ 
+     region_view()->OnResize(resize_amount, false);
+@@ -501,11 +501,11 @@
+   {
+     const int resize_amount = -180;
+     const int resize_width = last_uncollapsed_width + resize_amount;
+-    ASSERT_LE(resize_width, VerticalTabStripRegionView::kCollapseSnapWidth);
++    ASSERT_LE(resize_width, VerticalTabStripRegionView::CollapseSnapWidth());
+ 
+     region_view()->OnResize(resize_amount, true);
+     ASSERT_TRUE(base::test::RunUntil([&]() { return !IsAnimatingSize(); }));
+-    EXPECT_EQ(VerticalTabStripRegionView::kCollapsedWidth,
++    EXPECT_EQ(VerticalTabStripRegionView::CollapsedWidth(),
+               region_view()->GetPreferredSize().width());
+     EXPECT_EQ(last_uncollapsed_width,
+               state_controller()->GetUncollapsedWidth());
+@@ -571,7 +571,7 @@
+     const int resize_amount = -180;
+     const int resize_width =
+         region_view()->GetPreferredSize().width() + resize_amount;
+-    ASSERT_LE(resize_width, VerticalTabStripRegionView::kCollapseSnapWidth);
++    ASSERT_LE(resize_width, VerticalTabStripRegionView::CollapseSnapWidth());
+ 
+     region_view()->OnResize(resize_amount, true);
+     EXPECT_EQ(1, user_action_tester.GetActionCount(
+@@ -581,7 +581,7 @@
+     histogram_tester.ExpectTotalCount("Tabs.VerticalTabs.TabStripSize", 2);
+     histogram_tester.ExpectBucketCount(
+         "Tabs.VerticalTabs.TabStripSize",
+-        VerticalTabStripRegionView::kCollapsedWidth, 1);
++        VerticalTabStripRegionView::CollapsedWidth(), 1);
+   }
+ }
+ 
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_background_blur_backdrop.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_background_blur_backdrop.cc
+@@ -53,7 +53,7 @@
+   auto color = GetColorProvider()->GetColor(kColorToolbar);
+   color = SkColorSetA(color, base::ClampRound(alpha_ * 255.0f));
+   gfx::Rect rect = GetLocalBounds();
+-  rect.set_width(VerticalTabStripRegionView::kCollapsedWidth);
++  rect.set_width(VerticalTabStripRegionView::CollapsedWidth());
+   rect = GetMirroredRect(rect);
+   canvas->FillRect(rect, color);
+ 
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac_interactive_uitest.mm
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac_interactive_uitest.mm
+@@ -597,7 +597,7 @@
+ 
+   const int corner_padding = GetGlassCornerPadding();
+   const int expected_collapsed_width =
+-      VerticalTabStripRegionView::kCollapsedWidth + corner_padding;
++      VerticalTabStripRegionView::CollapsedWidth() + corner_padding;
+   const int expected_uncollapsed_width =
+       controller->GetUncollapsedWidth() + corner_padding;
+ 
 --- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 @@ -892,10 +892,13 @@
@@ -36,7 +240,7 @@
 +      vertical_tab_strip_content_frame_thickness =
 +          attach_vertical_tab_strip_to_content
 +              ? std::clamp(vertical_tab_strip_width -
-+                               VerticalTabStripRegionView::kCollapsedWidth,
++                               VerticalTabStripRegionView::CollapsedWidth(),
 +                           0, ContentsContainerOutline::GetThickness(false))
 +              : 0;
 +      if (vertical_tab_strip_content_frame_thickness > 0) {
@@ -64,6 +268,15 @@
          params.InsetHorizontal(inset_amount,
                                 /*leading=*/!vertical_right_aligned);
        }
+@@ -1080,7 +1097,7 @@
+             clip_content_for_animation || vertical_tab_strip_resize_animation;
+         InsetHorizontal(
+             unclipped_contents_region,
+-            VerticalTabStripRegionView::kCollapsedWidth +
++            VerticalTabStripRegionView::CollapsedWidth() +
+                 vertical_tab_strip_content_frame_thickness,
+             !vertical_right_aligned);
+       } else {
 @@ -1360,11 +1377,19 @@
      }
    }
@@ -101,6 +314,36 @@
            0, floating_corner_radius);
      }
      // Zen mode can hide the toolbar, leaving nothing above the strip to join.
+--- a/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -1397,7 +1397,7 @@
+ 
+ // static
+ int TabView::CollapsedWidth() {
+-  return VerticalTabStripRegionView::kCollapsedWidth -
++  return VerticalTabStripRegionView::CollapsedWidth() -
+          2 * GetLayoutConstant(
+                  LayoutConstant::kVerticalTabStripHorizontalPadding);
+ }
+--- a/chrome/browser/ui/views/tabs/common/tab_view_browsertest.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view_browsertest.cc
+@@ -861,14 +861,14 @@
+   tabs::VerticalTabStripStateController::From(browser())->RequestCollapse(true);
+ 
+   // Wait for the collapse animation to finish and ensure the width reaches
+-  // kCollapsedWidth.
++  // CollapsedWidth().
+   VerticalTabStripRegionView* const region_view =
+       BrowserView::GetBrowserViewForBrowser(browser())
+           ->vertical_tab_strip_region_view_for_testing();
+   ASSERT_TRUE(base::test::RunUntil([&]() {
+     return !BrowserAnimationController::From(browser())->IsAnimating(
+                TabStripAnimations::kVerticalTabStrip) &&
+-           region_view->width() <= VerticalTabStripRegionView::kCollapsedWidth;
++           region_view->width() <= VerticalTabStripRegionView::CollapsedWidth();
+   }));
+ 
+   TabCollectionNode* tab_node = unpinned_collection_node()->children()[0].get();
 --- a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
 +++ b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
 @@ -49,9 +49,18 @@
@@ -125,6 +368,28 @@
    views::ProposedLayout layouts;
    layouts.host_size = gfx::Size(width, height);
  
+--- a/chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.cc
++++ b/chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.cc
+@@ -109,7 +109,7 @@
+     // the default uncollapsed width.
+     tab_width = tab_strip->width();
+ 
+-    tab_min_width = VerticalTabStripRegionView::kCollapsedWidth;
++    tab_min_width = VerticalTabStripRegionView::CollapsedWidth();
+     tab_standard_width = tabs::kVerticalTabStripDefaultUncollapsedWidth;
+   } else {
+     // Use the largest tab in the tab strip when determining the delay so that
+--- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
++++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.cc
+@@ -95,7 +95,7 @@
+               ->GetPreferredSizeForOrientation(
+                   views::LayoutOrientation::kHorizontal)
+               .width() >= available_width ||
+-      available_width < VerticalTabStripRegionView::kCollapseSnapWidth ||
++      available_width < VerticalTabStripRegionView::CollapseSnapWidth() ||
+       is_collapsed) {
+     combo_button_orientation_ = views::LayoutOrientation::kVertical;
+     int current_y = 0;
 --- a/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.cc
 +++ b/chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.cc
 @@ -6,6 +6,7 @@
@@ -166,7 +431,7 @@
 +  // Keep the new-tab row square in the collapsed strip, like the tabs.
 +  new_tab_button_->SetPreferredSize(gfx::Size(
 +      -1, fully_collapsed
-+              ? VerticalTabStripRegionView::kCollapsedWidth -
++              ? VerticalTabStripRegionView::CollapsedWidth() -
 +                    2 * GetLayoutConstant(
 +                            LayoutConstant::kVerticalTabStripHorizontalPadding)
 +              : GetLayoutConstant(LayoutConstant::kVerticalTabHeight)));
