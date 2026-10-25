@@ -1,10 +1,15 @@
-<p align="center">
-  <img src="resources/assets/legacy.png" width="128" alt="Xelium app icon">
-</p>
-
-# Xelium
-
-Xelium is an unofficial, personal build of [Helium](https://github.com/imputnet/helium). It is not affiliated with or endorsed by the Helium team.
+<div align="center">
+    <img src="resources/assets/legacy.png"
+        title="Xelium" alt="Xelium logo" width="120" />
+    <h1>Xelium</h1>
+    <p>
+        An unofficial, personal build of Helium.<br>
+        Not affiliated with or endorsed by the Helium team.
+    </p>
+    <a href="https://github.com/minervanet/xelium-macos">
+        github.com/minervanet/xelium-macos
+    </a>
+</div>
 
 <p align="center">
   <img src="docs/screenshot.png" alt="Xelium with the lumno command bar open" width="100%">
