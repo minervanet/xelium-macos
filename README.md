@@ -20,8 +20,6 @@ I also added a few small patches of my own to make these pieces work together (s
 
 Two extensions are bundled and preinstalled: [lumno](https://github.com/kubai087/lumno-extension), which turns Command+T and Command+L into a command bar, and [DiaPeek](https://github.com/VanDerLars/DiaPeek), which opens links in a peek overlay. They are compiled into the app like Helium's built-in uBlock Origin, so they survive profile resets and never need a manual install.
 
-Crash reports are never uploaded anywhere, including to Helium. Xelium's crash dialog and `chrome://crashes` only offer a link to [Xelium's own GitHub issues](https://github.com/minervanet/xelium-macos/issues); nothing is sent automatically.
-
 ## Credits
 
 Everything here belongs to the original authors.
