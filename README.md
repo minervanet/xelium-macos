@@ -6,9 +6,6 @@
         An unofficial, personal build of Helium.<br>
         Not affiliated with or endorsed by the Helium team.
     </p>
-    <a href="https://github.com/minervanet/xelium-macos">
-        github.com/minervanet/xelium-macos
-    </a>
 </div>
 
 <p align="center">
