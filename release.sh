@@ -7,6 +7,7 @@
 #                        (destructive: removes build/src and out/).
 #   --skip-build         Reuse the existing out/Default build.
 #   --reuse-signed       Reuse out/Default/signed/stable/Xelium.app.
+#   --skip-package       Reuse the existing DMG (already signed/notarized).
 #   --skip-notarize      Sign only; skip Apple notarization (local testing).
 #   --no-release         Build the DMG and appcast, but do not publish.
 #   --draft              Create the GitHub release as a draft.
@@ -21,6 +22,7 @@
 #   PYTHON                  Python 3.11+ interpreter (default: build venv)
 
 set -euo pipefail
+export LC_ALL=C
 
 _root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _src="$_root_dir/build/src"
@@ -37,6 +39,7 @@ fi
 _do_prepare=0
 _do_build=1
 _reuse_signed=0
+_do_package=1
 _do_notarize=1
 _do_release=1
 _draft=""
@@ -49,6 +52,7 @@ while [ $# -gt 0 ]; do
     --prepare) _do_prepare=1 ;;
     --skip-build) _do_build=0 ;;
     --reuse-signed) _reuse_signed=1 ;;
+    --skip-package) _do_package=0 ;;
     --skip-notarize) _do_notarize=0 ;;
     --no-release) _do_release=0 ;;
     --draft) _draft="--draft" ;;
@@ -132,10 +136,18 @@ fi
 check_public_source
 
 _version="$(_version)"
-BUILD_NUMBER="$_build_number" \
-SKIP_SIGN="$_reuse_signed" \
-SKIP_NOTARIZE="$((1 - _do_notarize))" \
-  "$_root_dir/sign_and_package_app.sh"
+if [ "$_do_package" = 1 ]; then
+  BUILD_NUMBER="$_build_number" \
+  SKIP_SIGN="$_reuse_signed" \
+  SKIP_NOTARIZE="$((1 - _do_notarize))" \
+    "$_root_dir/sign_and_package_app.sh"
+else
+  if [ ! -f "$_build_dir/Xelium-${_version}-arm64.dmg" ]; then
+    echo "error: --skip-package but no DMG for $_version" >&2
+    exit 1
+  fi
+  xcrun stapler validate "$_build_dir/Xelium-${_version}-arm64.dmg"
+fi
 
 _dmg="$_build_dir/Xelium-${_version}-arm64.dmg"
 _build_number="$(cat "$_build_dir/.xelium-build-number")"
@@ -157,8 +169,11 @@ fi
 if [ -z "$_length" ]; then
   _length="$(stat -f%z "$_dmg")"
 fi
-_min_os="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' \
-  "$_out/signed/stable/Xelium.app/Contents/Info.plist")"
+_app_plist="$_out/signed/stable/Xelium.app/Contents/Info.plist"
+if [ ! -f "$_app_plist" ]; then
+  _app_plist="$_out/Xelium.app/Contents/Info.plist"
+fi
+_min_os="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$_app_plist")"
 _pub_date="$(date -u '+%a, %d %b %Y %H:%M:%S +0000')"
 _download_url="https://github.com/${_repo_slug}/releases/download/${_tag}/$(basename "$_dmg")"
 
