@@ -6,6 +6,10 @@
 
 Xelium is an unofficial, personal build of [Helium](https://github.com/imputnet/helium). It is not affiliated with or endorsed by the Helium team.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="Xelium with the lumno command bar open" width="100%">
+</p>
+
 ## What this is
 
 A proof of concept showing that Chromium/Helium can be made to look and feel like Arc, using the native Chromium frame instead of CEF.
