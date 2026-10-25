@@ -21,7 +21,7 @@ _build_dir="$_root_dir/build"
 
 _identity="${MACOS_CERTIFICATE_NAME:-Developer ID Application: Abrar Zharifan Syah (JSYLVAZ935)}"
 _profile="${NOTARY_PROFILE:-xelium-notary}"
-_python="${PYTHON:-$HOME/helium-build/venv/bin/python}"
+_python="${PYTHON:-$_root_dir/../venv/bin/python}"
 if [ ! -x "$_python" ]; then
   _python="$(command -v python3)"
 fi

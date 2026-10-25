@@ -30,8 +30,8 @@ _out="$_src/out/Default"
 _build_dir="$_root_dir/build"
 _repo_slug="minervanet/xelium-macos"
 _feed_url="https://raw.githubusercontent.com/minervanet/xelium-macos/main/appcast.xml"
-_sparkle_bin="${SPARKLE_BIN:-$HOME/helium-build/tools/sparkle-2.10.0/bin}"
-_python="${PYTHON:-$HOME/helium-build/venv/bin/python}"
+_sparkle_bin="${SPARKLE_BIN:-$_root_dir/../tools/sparkle-2.10.0/bin}"
+_python="${PYTHON:-$_root_dir/../venv/bin/python}"
 if [ ! -x "$_python" ]; then
   _python="$(command -v python3)"
 fi
