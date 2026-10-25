@@ -12,6 +12,12 @@
   <img src="docs/screenshot.png" alt="Xelium with the lumno command bar open" width="100%">
 </p>
 
+## Download
+
+[Latest release](https://github.com/minervanet/xelium-macos/releases/latest) for macOS 13+ on Apple silicon.
+
+Xelium updates itself with Sparkle 2 from its own [appcast](https://raw.githubusercontent.com/minervanet/xelium-macos/main/appcast.xml). Use **Xelium → Check for Updates…**, or leave **Automatically Check for Updates** enabled.
+
 ## What this is
 
 A proof of concept showing that Chromium/Helium can be made to look and feel like Arc, using the native Chromium frame instead of CEF.
@@ -45,6 +51,8 @@ Everything here belongs to the original authors.
 ## Updates
 
 I'll keep Xelium updated as long as I'm still using Helium and Helium is still around. Updates won't be quick, since every big change means a Chromium rebuild that takes hours. Thanks for your patience.
+
+Releases are delivered through Sparkle from this repo's own appcast, never Helium's. `release.sh` handles the build, signing, notarization, DMG, appcast, and GitHub release.
 
 ## Notes
 
