@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Xelium</title>
+    <link>https://github.com/minervanet/xelium-macos</link>
+    <description>Xelium release feed</description>
+    <language>en</language>
+    <item>
+      <title>Xelium 0.20.1.1</title>
+      <pubDate>Sun, 25 Oct 2026 03:04:31 +0000</pubDate>
+      <sparkle:version>202610250947</sparkle:version>
+      <sparkle:shortVersionString>0.20.1.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/minervanet/xelium-macos/releases/download/v0.20.1.1/Xelium-0.20.1.1-arm64.dmg"
+                 sparkle:edSignature="O0ZYRZBceMxyLs7z8jYsXLJxzbDxMGmls1SPGJECnCppUizumfy6OwgHzgBREcEj4MmaeHjKUKYpRQMWPPw9DA=="
+                 length="125056894"
+                 type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>
