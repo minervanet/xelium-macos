@@ -235,7 +235,7 @@ Comfortable sizing for vertical tabs, configurable rounded-frame thickness, narr
 
 1. Open \`$(basename "$_dmg")\`.
 2. Drag **Xelium** to **Applications**.
-3. If Gatekeeper asks on first launch, use **System Settings → Privacy & Security → Open Anyway**.
+3. Launch **Xelium**. The app is signed with a Developer ID and notarized by Apple, so macOS should open it without a Gatekeeper warning.
 
 SHA-256: \`${_sha256}\`
 EOF
