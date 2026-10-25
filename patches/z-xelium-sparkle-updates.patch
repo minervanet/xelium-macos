@@ -1,0 +1,377 @@
+--- a/chrome/updater/sparkle.gni
++++ b/chrome/updater/sparkle.gni
+@@ -9,6 +9,9 @@
+   # SUPublicEDKey: EdDSA key used for signing Sparkle updates.
+   sparkle_ed_key = ""
+ 
++  # SUFeedURL: appcast feed. Xelium must never point at Helium's feed.
++  sparkle_feed_url = "https://raw.githubusercontent.com/minervanet/xelium-macos/main/appcast.xml"
++
+   # SUEnableAutomaticChecks: enable automatic checking of updates
+   sparkle_automatic_checks = false
+ 
+--- a/build/apple/tweak_info_plist.py
++++ b/build/apple/tweak_info_plist.py
+@@ -217,7 +217,8 @@
+     return re.match(r'^[0-9a-zA-Z-.]+$', bundle_identifier) is not None
+ 
+ 
+-def _AddSparkleKeys(plist, ed_key, auto_checks, check_interval):
++def _AddSparkleKeys(plist, ed_key, auto_checks, check_interval, feed_url):
++  plist['SUFeedURL'] = feed_url
+   plist['SUPublicEDKey'] = ed_key
+   plist['SUEnableAutomaticChecks'] = 'YES' if auto_checks else 'NO'
+   plist['SUScheduledCheckInterval'] = check_interval
+@@ -227,7 +228,7 @@
+ 
+ def _RemoveSparkleKeys(plist):
+   """Removes any set Sparkle keys."""
+-  _RemoveKeys(plist, 'SUPublicEDKey', 'SUEnableAutomaticChecks',
++  _RemoveKeys(plist, 'SUFeedURL', 'SUPublicEDKey', 'SUEnableAutomaticChecks',
+               'SUScheduledCheckInterval', 'SUVerifyUpdateBeforeExtraction',
+               'SUShowReleaseNotes')
+ 
+@@ -388,6 +389,12 @@
+         default=None,
+         help='Sparkle update signing EdDSA key'
+     )
++    parser.add_option('--sparkle_feed_url',
++        dest='sparkle_feed_url',
++        action='store',
++        default=None,
++        help='Sparkle appcast feed URL'
++    )
+     parser.add_option(
+         '--sparkle_automatic_checks',
+         dest='sparkle_automatic_checks',
+@@ -586,12 +593,16 @@
+       if not options.sparkle_ed_key:
+         print('Sparkle updates require an EdDSA key.', file=sys.stderr)
+         return 1
++      if not options.sparkle_feed_url:
++        print('Sparkle updates require an appcast feed URL.', file=sys.stderr)
++        return 1
+       if options.sparkle_check_interval < 3600:
+         print('Sparkle update check interval must be at least 1 hour (3600).', file=sys.stderr)
+         return 1
+       _AddSparkleKeys(plist, options.sparkle_ed_key,
+                       options.sparkle_automatic_checks,
+-                      options.sparkle_check_interval)
++                      options.sparkle_check_interval,
++                      options.sparkle_feed_url)
+     else:
+       _RemoveSparkleKeys(plist)
+ 
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -540,6 +540,7 @@
+       args += [
+         "--sparkle=1",
+         "--sparkle_ed_key=$sparkle_ed_key",
++        "--sparkle_feed_url=$sparkle_feed_url",
+         "--sparkle_check_interval=$sparkle_check_interval",
+       ]
+ 
+--- a/chrome/browser/mac/sparkle_glue.h
++++ b/chrome/browser/mac/sparkle_glue.h
+@@ -70,12 +70,21 @@
+ // Functions that may be accessed from non-Objective-C C/C++ code.
+ namespace helium {
+ 
++// Creates the Sparkle updater singleton if it does not exist yet.
++void EnsureSparkleInitialized();
++
+ // Attempt to relaunch browser and install updates if any.
+ void RelaunchBrowserUsingSparkle();
+ 
+ // Initializes Sparkle Framework with default values.
+ void InitializeSparkleFramework();
+ 
++// True if automatic update checks are enabled.
++bool AutomaticUpdateChecksEnabled();
++
++// Enables or disables automatic update checks.
++void SetAutomaticUpdateChecks(bool enabled);
++
+ // True if Sparkle is enabled.
+ bool SparkleEnabled();
+ 
+--- a/chrome/browser/mac/sparkle_glue.mm
++++ b/chrome/browser/mac/sparkle_glue.mm
+@@ -125,13 +125,8 @@
+ }
+ 
+ - (BOOL)shouldAccessUpdateService {
+-  helium::TryAcquireProfilePtr();
+-
+-  if (!profile_) {
+-    return NO;
+-  }
+-
+-  return helium::ShouldAccessUpdateService(*profile_->GetPrefs());
++  // Xelium always talks to its own appcast, never to Helium's update service.
++  return YES;
+ }
+ 
+ - (BOOL)updater:(nonnull SPUUpdater *)updater
+@@ -157,14 +152,11 @@
+ 
+ // Delegated method. Return the appcast URL for the installed channel.
+ - (NSString*)feedURLStringForUpdater:(SPUUpdater*)updater {
+-  helium::TryAcquireProfilePtr();
+-
+-  if (!profile_) {
+-    return @"";
+-  }
+-
+-  return base::SysUTF8ToNSString(
+-    helium::GetBrowserUpdateURL(*profile_->GetPrefs()).spec());
++  // SUFeedURL is baked into Info.plist by the build so the feed can never
++  // fall back to Helium's update service.
++  NSString* feed_url =
++      [[NSBundle mainBundle] objectForInfoDictionaryKey:@"SUFeedURL"];
++  return feed_url ?: @"";
+ }
+ 
+ - (void)updater:(SPUUpdater*)updater failedToDownloadUpdate:(NSError*)error {
+@@ -255,26 +247,11 @@
+ VersionUpdaterSparkle::VersionUpdaterSparkle(Profile* profile)
+     : weak_ptr_factory_(this) {
+ 
+-  // Ensure the Sparkle observer is only created once because there is only a
+-  // single Sparkle instance. We do not want to reset Sparkle's delegate, etc.
+-  static SparkleObserver* sparkle_observer = nil;
+-  static SparkleDriver* sparkle_driver = nil;
+-  static dispatch_once_t token;
+-  static NSBundle* hostBundle = [NSBundle mainBundle];
++  // The Sparkle singleton is created once and shared by the menu, the update
++  // settings page, and the background checker.
++  helium::EnsureSparkleInitialized();
++  [VersionUpdaterSparkle::sparkle_observer_ updateProfile:profile];
+ 
+-  dispatch_once(&token, ^{
+-    sparkle_observer = [[SparkleObserver alloc] initWithProfile:profile];
+-    sparkle_driver = [[SparkleDriver alloc] initWithObserver:sparkle_observer];
+-
+-    VersionUpdaterSparkle::sparkle_observer_ = sparkle_observer;
+-    VersionUpdaterSparkle::sparkle_updater_ = [[SPUUpdater alloc]
+-                                              initWithHostBundle:hostBundle
+-                                              applicationBundle:hostBundle
+-                                              userDriver:sparkle_driver
+-                                              delegate:sparkle_observer];
+-
+-  });
+-
+   sparkle_subscription_ = [VersionUpdaterSparkle::sparkle_observer_
+       registerStatusCallback:base::BindRepeating(
+                                  &VersionUpdaterSparkle::UpdateStatus,
+@@ -364,25 +341,67 @@
+   }
+ }
+ 
++void EnsureSparkleInitialized() {
++  static dispatch_once_t token;
++  dispatch_once(&token, ^{
++    NSBundle* hostBundle = [NSBundle mainBundle];
++    SparkleObserver* observer =
++        [[SparkleObserver alloc] initWithProfile:nullptr];
++    SparkleDriver* driver = [[SparkleDriver alloc] initWithObserver:observer];
++
++    VersionUpdaterSparkle::sparkle_observer_ = observer;
++    VersionUpdaterSparkle::sparkle_updater_ = [[SPUUpdater alloc]
++                                              initWithHostBundle:hostBundle
++                                              applicationBundle:hostBundle
++                                              userDriver:driver
++                                              delegate:observer];
++  });
++}
++
++bool AutomaticUpdateChecksEnabled() {
++  NSNumber* value = [[NSUserDefaults standardUserDefaults]
++      objectForKey:@"SUEnableAutomaticChecks"];
++  return value ? [value boolValue] : true;
++}
++
++void SetAutomaticUpdateChecks(bool enabled) {
++  [[NSUserDefaults standardUserDefaults] setBool:enabled
++                                          forKey:@"SUEnableAutomaticChecks"];
++
++  InitializeSparkleFramework();
++  SPUUpdater* updater = VersionUpdaterSparkle::sparkle_updater_;
++  if (updater) {
++    updater.automaticallyChecksForUpdates = enabled;
++  }
++}
++
+ void InitializeSparkleFramework() {
++  EnsureSparkleInitialized();
++
+   SPUUpdater* updater = VersionUpdaterSparkle::sparkle_updater_;
+   SparkleObserver* observer = VersionUpdaterSparkle::sparkle_observer_;
+ 
+-  if (!observer || ![observer shouldAccessUpdateService]) {
++  if (!observer || !updater || ![observer shouldAccessUpdateService]) {
+     return;
+   }
+ 
+-  if (updater) {
+-    NSError* err = nullptr;
+-    updater.automaticallyChecksForUpdates = YES;
+-    updater.automaticallyDownloadsUpdates = YES;
++  static bool started = false;
++  if (started) {
++    return;
++  }
+ 
+-    if ([updater startUpdater:&err]) {
++  NSError* err = nullptr;
++  updater.automaticallyChecksForUpdates = AutomaticUpdateChecksEnabled();
++  updater.automaticallyDownloadsUpdates = YES;
++
++  if ([updater startUpdater:&err]) {
++    started = true;
++    if (updater.automaticallyChecksForUpdates) {
+       [updater checkForUpdatesInBackground];
+-    } else if (err && observer) {
+-      [observer updateStatus:VersionUpdater::FAILED
+-                error_string:[err.localizedDescription copy]];
+     }
++  } else if (err) {
++    [observer updateStatus:VersionUpdater::FAILED
++              error_string:[err.localizedDescription copy]];
+   }
+ }
+ 
+--- a/chrome/browser/ui/cocoa/BUILD.gn
++++ b/chrome/browser/ui/cocoa/BUILD.gn
+@@ -132,6 +132,7 @@
+     "//chrome/browser:app_controller_mac",
+     "//chrome/browser:browser_features",
+     "//chrome/browser:browser_process",
++    "//chrome/browser:buildflags",
+     "//chrome/browser:chrome_browser_application_mac",
+     "//chrome/browser:command_updater_impl",
+     "//chrome/browser:global_keyboard_shortcuts_mac",
+--- a/chrome/browser/ui/cocoa/main_menu_builder.mm
++++ b/chrome/browser/ui/cocoa/main_menu_builder.mm
+@@ -13,6 +13,7 @@
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/browser_features.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/buildflags.h"
+ #include "chrome/browser/feedback/report_unsafe_site_dialog.h"
+ #include "chrome/browser/ui/cocoa/accelerators_cocoa.h"
+ #include "chrome/browser/ui/cocoa/history_menu_bridge.h"
+@@ -56,6 +57,16 @@
+                   .tag(IDC_ABOUT)
+                   .target(app_delegate)
+                   .action(@selector(orderFrontStandardAboutPanel:)),
++#if BUILDFLAG(ENABLE_SPARKLE)
++              Item(IDS_CHECK_FOR_UPDATES_MAC)
++                  .target(app_delegate)
++                  .action(@selector(checkForUpdates:))
++                  .remove_if(is_pwa),
++              Item(IDS_AUTOMATICALLY_CHECK_FOR_UPDATES_MAC)
++                  .target(app_delegate)
++                  .action(@selector(toggleAutomaticUpdateChecks:))
++                  .remove_if(is_pwa),
++#endif
+               Item().is_separator(),
+               Item(IDS_PREFERENCES)
+                   .tag(IDC_OPTIONS)
+--- a/chrome/browser/app_controller_mac.h
++++ b/chrome/browser/app_controller_mac.h
+@@ -7,6 +7,7 @@
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
++#include "chrome/browser/buildflags.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "components/sessions/core/session_id.h"
+ #include "components/sessions/core/tab_restore_service.h"
+@@ -122,6 +123,13 @@
+ // Owner" (NSApplication) for a Branded About Box
+ - (IBAction)orderFrontStandardAboutPanel:(id)sender;
+ - (IBAction)orderFrontStandardAboutPanelForProfile:(Profile*)profile;
++
++#if BUILDFLAG(ENABLE_SPARKLE)
++// Opens the update settings page, which performs an update check.
++- (IBAction)checkForUpdates:(id)sender;
++// Toggles Sparkle's automatic update checks.
++- (IBAction)toggleAutomaticUpdateChecks:(id)sender;
++#endif
+ 
+ // Toggles the "Confirm to Quit" preference.
+ - (IBAction)toggleConfirmToQuit:(id)sender;
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -1673,6 +1673,16 @@
+   } else if (action == @selector(toggleConfirmToQuit:)) {
+     [self updateConfirmToQuitPrefMenuItem:static_cast<NSMenuItem*>(item)];
+     enable = [self shouldEnableConfirmToQuitPrefMenuItem];
++#if BUILDFLAG(ENABLE_SPARKLE)
++  } else if (action == @selector(checkForUpdates:)) {
++    enable = canOpenNewBrowser;
++  } else if (action == @selector(toggleAutomaticUpdateChecks:)) {
++    NSMenuItem* menuItem = base::apple::ObjCCast<NSMenuItem>(item);
++    [menuItem setState:helium::AutomaticUpdateChecksEnabled()
++                          ? NSControlStateValueOn
++                          : NSControlStateValueOff];
++    enable = YES;
++#endif
+   }
+   return enable;
+ }
+@@ -2140,8 +2150,24 @@
+   PrefService* prefService = g_browser_process->local_state();
+   bool enabled = prefService->GetBoolean(prefs::kConfirmToQuitEnabled);
+   prefService->SetBoolean(prefs::kConfirmToQuitEnabled, !enabled);
++}
++
++#if BUILDFLAG(ENABLE_SPARKLE)
++- (IBAction)checkForUpdates:(id)sender {
++  Profile* profile = [self lastProfileIfLoaded];
++  if (!profile) {
++    return;
++  }
++
++  helium::InitializeSparkleFramework();
++  chrome::ShowSettingsSubPageForProfile(profile, "help");
+ }
+ 
++- (IBAction)toggleAutomaticUpdateChecks:(id)sender {
++  helium::SetAutomaticUpdateChecks(!helium::AutomaticUpdateChecksEnabled());
++}
++#endif
++
+ // Explicitly bring to the foreground when creating new windows from the dock.
+ - (void)commandFromDock:(id)sender {
+   [NSApp activateIgnoringOtherApps:YES];
+--- a/chrome/app/generated_resources.grd
++++ b/chrome/app/generated_resources.grd
+@@ -15819,6 +15819,12 @@
+         <!-- App menu -->
+         <message name="IDS_ABOUT_MAC" desc="In Title Case: The Mac menu item to open the about box.">
+           About <ph name="PRODUCT_NAME">$1<ex>Helium</ex></ph>
++        </message>
++        <message name="IDS_CHECK_FOR_UPDATES_MAC" desc="In Title Case: The Mac menu item to check for updates.">
++          Check for Updates...
++        </message>
++        <message name="IDS_AUTOMATICALLY_CHECK_FOR_UPDATES_MAC" desc="In Title Case: The Mac menu item to toggle automatic update checks.">
++          Automatically Check for Updates
+         </message>
+         <message name="IDS_CLEAR_BROWSING_DATA_MAC" desc="In Title Case: The Mac menu item for clearing browsing data.">
+           Delete Browsing Data...
+--- a/chrome/installer/mac/signing/chromium_config.py
++++ b/chrome/installer/mac/signing/chromium_config.py
+@@ -19,3 +19,10 @@
+         if os.environ.get('PROD_MACOS_SPECIAL_ENTITLEMENTS_PROFILE_PATH'):
+             return 'Helium'
+         return None
++
++    @property
++    def run_spctl_assess(self):
++        # Xelium: spctl assessment fails until the app has been notarized, and
++        # Chromium runs this check before submitting. Verification happens
++        # after stapling in release.sh instead.
++        return False
