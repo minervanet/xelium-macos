@@ -243,7 +243,7 @@
 +  // layout is unchanged for everyone else.
 +  if (HeliumWorkspaceController::From(browser_view->browser())) {
 +    auto switcher = std::make_unique<HeliumWorkspaceSwitcherView>(
-+        browser_view->browser(), state_controller_);
++        browser_view->browser());
 +    switcher->SetProperty(
 +        views::kMarginsKey,
 +        gfx::Insets::TLBR(0, region_horizontal_padding, 0,
@@ -2469,7 +2469,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.h
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,57 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -2484,54 +2484,53 @@
 +#include "base/callback_list.h"
 +#include "base/functional/callback.h"
 +#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
 +#include "ui/base/metadata/metadata_header_macros.h"
 +#include "ui/views/view.h"
 +
 +class BrowserWindowInterface;
 +
-+namespace tabs {
-+class VerticalTabStripStateController;
-+enum class VerticalTabStripCollapseState;
-+}  // namespace tabs
-+
 +// Small workspace switcher row for the bottom of the vertical sidebar: one
 +// dot per workspace plus a button for creating workspaces. Click switches,
-+// right-click offers rename/delete; the name is shown in the tooltip. Hidden
-+// entirely when workspaces are unavailable (feature off, private or
-+// non-normal windows). Uses only theme colors so translucent native frame
-+// materials keep working.
++// right-click offers rename/delete; the name is shown in the tooltip. Wraps
++// onto extra rows when there are more dots than the strip is wide, so every
++// workspace stays visible and clickable. Hidden entirely when workspaces are
++// unavailable (feature off, private or non-normal windows). Uses only theme
++// colors so translucent native frame materials keep working.
 +class HeliumWorkspaceSwitcherView : public views::View {
 +  METADATA_HEADER(HeliumWorkspaceSwitcherView, views::View)
 +
 + public:
-+  HeliumWorkspaceSwitcherView(
-+      BrowserWindowInterface* browser,
-+      tabs::VerticalTabStripStateController* state_controller);
++  explicit HeliumWorkspaceSwitcherView(BrowserWindowInterface* browser);
 +  HeliumWorkspaceSwitcherView(const HeliumWorkspaceSwitcherView&) = delete;
 +  HeliumWorkspaceSwitcherView& operator=(const HeliumWorkspaceSwitcherView&) =
 +      delete;
 +  ~HeliumWorkspaceSwitcherView() override;
 +
++  // views::View:
++  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
++
 + private:
 +  class WorkspaceItemView;
 +
 +  void Refresh();
++  void ScheduleRefresh();
++  int ItemsPerRow() const;
 +  void OnControllerChanged();
-+  void OnCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
-+  void ApplyOrientation();
 +
 +  raw_ptr<BrowserWindowInterface> browser_;
-+  bool collapsed_ = false;
 +  std::vector<raw_ptr<WorkspaceItemView>> items_;
 +  base::CallbackListSubscription controller_subscription_;
-+  base::CallbackListSubscription collapse_subscription_;
++  bool refresh_pending_ = false;
++  int last_items_per_row_ = 0;
++  base::WeakPtrFactory<HeliumWorkspaceSwitcherView> weak_factory_{this};
 +};
 +
 +#endif  // CHROME_BROWSER_UI_HELIUM_HELIUM_WORKSPACE_SWITCHER_VIEW_H_
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.cc
-@@ -0,0 +1,450 @@
+@@ -0,0 +1,492 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -2542,12 +2541,14 @@
 +#include <utility>
 +
 +#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/memory/weak_ptr.h"
 +#include "base/strings/utf_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
 +#include "cc/paint/paint_flags.h"
 +#include "chrome/app/vector_icons/vector_icons.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/helium/helium_workspace_controller.h"
-+#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 +#include "chrome/grit/generated_resources.h"
 +#include "components/strings/grit/components_strings.h"
 +#include "ui/accessibility/ax_enums.mojom.h"
@@ -2578,6 +2579,7 @@
 +
 +// Size of the dot hit area; the painted dot is smaller.
 +constexpr int kDotHitSize = 24;
++constexpr int kDotGap = 2;
 +constexpr int kDotRadius = 6;
 +constexpr int kDotRingWidth = 2;
 +
@@ -2840,7 +2842,21 @@
 +              },
 +              weak_controller, id));
 +    } else if (command_id == kDeleteCommand) {
-+      controller->DeleteWorkspace(id_);
++      // The menu runner lives on this view, and deleting can rebuild the whole
++      // switcher. Post so the menu unwinds before anything is destroyed.
++      const std::string id = id_;
++      base::WeakPtr<HeliumWorkspaceController> weak_controller =
++          controller->GetWeakPtr();
++      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE,
++          base::BindOnce(
++              [](base::WeakPtr<HeliumWorkspaceController> c,
++                 const std::string& id) {
++                if (c) {
++                  c->DeleteWorkspace(id);
++                }
++              },
++              weak_controller, id));
 +    }
 +  }
 +
@@ -2885,11 +2901,14 @@
 +};
 +
 +HeliumWorkspaceSwitcherView::HeliumWorkspaceSwitcherView(
-+    BrowserWindowInterface* browser,
-+    tabs::VerticalTabStripStateController* state_controller)
++    BrowserWindowInterface* browser)
 +    : browser_(browser) {
-+  SetLayoutManager(std::make_unique<views::BoxLayout>(
-+      views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(2, 0), 2));
++  auto* layout = static_cast<views::BoxLayout*>(SetLayoutManager(
++      std::make_unique<views::BoxLayout>(
++          views::BoxLayout::Orientation::kVertical, gfx::Insets::VH(2, 0),
++          0)));
++  layout->set_cross_axis_alignment(
++      views::BoxLayout::CrossAxisAlignment::kCenter);
 +  HeliumWorkspaceController* controller =
 +      HeliumWorkspaceController::From(browser);
 +  if (controller) {
@@ -2897,21 +2916,21 @@
 +        &HeliumWorkspaceSwitcherView::OnControllerChanged,
 +        base::Unretained(this)));
 +  }
-+  if (state_controller) {
-+    collapse_subscription_ =
-+        state_controller->RegisterOnCollapseChanged(base::BindRepeating(
-+            &HeliumWorkspaceSwitcherView::OnCollapseStateChanged,
-+            base::Unretained(this)));
-+    collapsed_ = state_controller->GetCollapseState() !=
-+                 tabs::VerticalTabStripCollapseState::kExpanded;
-+  }
 +  Refresh();
-+  ApplyOrientation();
 +}
 +
 +HeliumWorkspaceSwitcherView::~HeliumWorkspaceSwitcherView() = default;
 +
++int HeliumWorkspaceSwitcherView::ItemsPerRow() const {
++  // Before the first layout there is no width yet; assume a typical expanded
++  // sidebar and rebuild once the real width arrives.
++  const int available = width() > 0 ? width() : 160;
++  return std::max(1, (available + kDotGap) / (kDotHitSize + kDotGap));
++}
++
 +void HeliumWorkspaceSwitcherView::Refresh() {
++  refresh_pending_ = false;
++  last_items_per_row_ = ItemsPerRow();
 +  RemoveAllChildViews();
 +  items_.clear();
 +  HeliumWorkspaceController* controller =
@@ -2921,11 +2940,13 @@
 +  if (!available) {
 +    return;
 +  }
++
++  std::vector<std::unique_ptr<views::View>> entries;
 +  for (const auto& entry : controller->GetWorkspaces()) {
 +    auto item = std::make_unique<WorkspaceItemView>(
 +        browser_, entry.id, entry.name, entry.active, entry.tab_count);
 +    items_.push_back(item.get());
-+    AddChildView(std::move(item));
++    entries.push_back(std::move(item));
 +  }
 +  // "New workspace" affordance. An ImageButton keeps hover feedback without
 +  // any opaque fill, so the translucent sidebar material shows through.
@@ -2945,36 +2966,56 @@
 +  add_button->SetTooltipText(
 +      l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_NEW));
 +  add_button->SetPreferredSize(gfx::Size(kDotHitSize, kDotHitSize));
-+  AddChildView(std::move(add_button));
++  entries.push_back(std::move(add_button));
++
++  // Wrap into as many rows as needed so nothing overflows the strip. Each row
++  // is centered under the one above it.
++  const size_t per_row = static_cast<size_t>(last_items_per_row_);
++  for (size_t start = 0; start < entries.size(); start += per_row) {
++    auto row = std::make_unique<views::View>();
++    auto* row_layout = static_cast<views::BoxLayout*>(row->SetLayoutManager(
++        std::make_unique<views::BoxLayout>(
++            views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
++            kDotGap)));
++    row_layout->set_main_axis_alignment(
++        views::BoxLayout::MainAxisAlignment::kCenter);
++    row_layout->set_cross_axis_alignment(
++        views::BoxLayout::CrossAxisAlignment::kCenter);
++    const size_t end = std::min(entries.size(), start + per_row);
++    for (size_t i = start; i < end; ++i) {
++      row->AddChildView(std::move(entries[i]));
++    }
++    AddChildView(std::move(row));
++  }
 +  InvalidateLayout();
 +  SchedulePaint();
 +}
 +
-+void HeliumWorkspaceSwitcherView::OnControllerChanged() {
-+  Refresh();
-+}
-+
-+void HeliumWorkspaceSwitcherView::OnCollapseStateChanged(
-+    tabs::VerticalTabStripCollapseState state) {
-+  const bool collapsed =
-+      state != tabs::VerticalTabStripCollapseState::kExpanded;
-+  if (collapsed == collapsed_) {
++void HeliumWorkspaceSwitcherView::ScheduleRefresh() {
++  if (refresh_pending_) {
 +    return;
 +  }
-+  collapsed_ = collapsed;
-+  ApplyOrientation();
++  refresh_pending_ = true;
++  // Rebuilding destroys the view that may still be handling a click or a menu
++  // command, so always do it after the current event has unwound.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&HeliumWorkspaceSwitcherView::Refresh,
++                                weak_factory_.GetWeakPtr()));
 +}
 +
-+void HeliumWorkspaceSwitcherView::ApplyOrientation() {
-+  // A horizontal row of dots only fits the expanded strip. Collapsed strips
-+  // are icon-sized, so stack the dots vertically like the tab icons above.
-+  auto* layout = static_cast<views::BoxLayout*>(GetLayoutManager());
-+  layout->SetOrientation(collapsed_
-+                             ? views::BoxLayout::Orientation::kVertical
-+                             : views::BoxLayout::Orientation::kHorizontal);
-+  layout->set_cross_axis_alignment(
-+      views::BoxLayout::CrossAxisAlignment::kCenter);
-+  InvalidateLayout();
++void HeliumWorkspaceSwitcherView::OnControllerChanged() {
++  ScheduleRefresh();
++}
++
++void HeliumWorkspaceSwitcherView::OnBoundsChanged(
++    const gfx::Rect& previous_bounds) {
++  views::View::OnBoundsChanged(previous_bounds);
++  if (!GetVisible() || refresh_pending_) {
++    return;
++  }
++  if (ItemsPerRow() != last_items_per_row_) {
++    ScheduleRefresh();
++  }
 +}
 +
 +BEGIN_METADATA(HeliumWorkspaceSwitcherView, WorkspaceItemView)
