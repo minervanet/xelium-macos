@@ -1758,7 +1758,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,435 @@
+@@ -0,0 +1,437 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1909,11 +1909,13 @@
 +  void SetSelected(bool selected) {
 +    marker_->SetText(selected ? u"\u2192" : u"");
 +    if (selected) {
-+      // Translucent so the frosted backdrop tints through.
-+      SkColor base = GetColorProvider()->GetColor(
-+          ui::kColorAppMenuRowBackgroundHovered);
++      // Exactly the 3-dot (app) menu hover: MenuItemView paints selected
++      // rows with kColorMenuItemBackgroundSelected at full opacity, no
++      // alpha mixing. Matches the native feel instead of glowing.
 +      SetBackground(views::CreateRoundedRectBackground(
-+          SkColorSetA(base, 0x73), kRowRadius));
++          GetColorProvider()->GetColor(
++              ui::kColorMenuItemBackgroundSelected),
++          kRowRadius));
 +    } else {
 +      SetBackground(nullptr);
 +    }
