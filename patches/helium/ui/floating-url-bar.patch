@@ -1,9 +1,9 @@
 --- a/chrome/app/chrome_command_ids.h
 +++ b/chrome/app/chrome_command_ids.h
-@@ -300,6 +300,7 @@
+@@ -298,6 +298,7 @@
+ #define IDC_SHOW_TTC_MENU 40306
+ 
  #define IDC_HELIUM_SERVICES_OPEN 40700
- #define IDC_HELIUM_NEXT_WORKSPACE 40701
- #define IDC_HELIUM_PREVIOUS_WORKSPACE 40702
 +#define IDC_HELIUM_COMMAND_BAR 40703
  
  // Spell-check
@@ -11,10 +11,10 @@
 
 --- a/chrome/app/settings_strings.grdp
 +++ b/chrome/app/settings_strings.grdp
-@@ -365,6 +365,12 @@
+@@ -359,6 +359,12 @@
      </message>
-     <message name="IDS_SETTINGS_WORKSPACES_DESCRIPTION" desc="Description for the workspaces toggle in appearance settings.">
-       Keep several sets of tabs in one window and switch between them from the sidebar
+     <message name="IDS_SETTINGS_SHOW_PROGRESS_BAR" desc="Label for the toggle that shows loading progress in the address bar.">
+       Show loading progress in the address bar
 +    </message>
 +    <message name="IDS_SETTINGS_COMMAND_BAR" desc="Label for the toggle that enables the native command bar.">
 +      Command bar
@@ -27,10 +27,10 @@
 
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -693,6 +693,10 @@
- 
- // String pref with the id of the currently active workspace.
- inline constexpr char kHeliumWorkspacesActive[] = "helium.workspaces.active";
+@@ -678,6 +678,10 @@
+ // location bar.
+ inline constexpr char kHeliumShowProgressBar[] =
+     "helium.browser.show_progress_bar";
 +
 +// A boolean pref set to true if the native command bar is enabled. When on,
 +// Cmd+T / Cmd+L open the bar instead of their built-in actions.
@@ -41,10 +41,11 @@
 
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
-@@ -20,6 +20,46 @@
+@@ -19,3 +19,44 @@
+     "//chrome/common:constants",
    ]
  }
- 
++
 +source_set("helium_command_bar") {
 +  sources = [
 +    "helium_command_bar_controller.cc",
@@ -85,9 +86,6 @@
 +  ]
 +}
 +
- source_set("helium_workspaces") {
-   sources = [
-     "helium_workspace_controller.cc",
 
 --- a/chrome/browser/ui/browser_window/public/browser_window_features.h
 +++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
@@ -96,13 +94,13 @@
  class FullscreenControlHost;
  class HeliumLayoutStateController;
 +class HeliumCommandBarController;
- class HeliumWorkspaceController;
  class HistoryClustersSidePanelCoordinator;
  class HistorySidePanelCoordinator;
-@@ -473,6 +474,9 @@
-   // Per-window Workspaces state. Owned here so the tab strip, sidebar and tab
-   // menu can all reach it via HeliumWorkspaceController::From(browser).
-   std::unique_ptr<HeliumWorkspaceController> helium_workspace_controller_;
+ class ImmersiveModeController;
+@@ -469,6 +470,9 @@
+       send_tab_to_self_iph_controller_;
+   std::unique_ptr<VerticalTabIphController> vertical_tab_iph_controller_;
+   std::unique_ptr<HeliumLayoutStateController> helium_layout_state_controller_;
 +  // Per-window native command bar. Owned here so the command handler can
 +  // reach it via HeliumCommandBarController::From(browser).
 +  std::unique_ptr<HeliumCommandBarController> helium_command_bar_controller_;
@@ -117,12 +115,12 @@
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
 +#include "chrome/browser/ui/helium/helium_command_bar_controller.h"
- #include "chrome/browser/ui/helium/helium_workspace_controller.h"
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
-@@ -656,6 +657,10 @@
-     helium_workspace_controller_ =
-         GetUserDataFactory().CreateInstance<HeliumWorkspaceController>(
+ #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
+@@ -651,6 +652,10 @@
+     helium_layout_state_controller_ =
+         GetUserDataFactory().CreateInstance<HeliumLayoutStateController>(
              *browser, browser, profile->GetPrefs());
 +
 +    helium_command_bar_controller_ =
@@ -131,7 +129,7 @@
  
      vertical_tab_strip_state_controller_ =
          GetUserDataFactory()
-@@ -846,6 +851,9 @@
+@@ -841,6 +846,9 @@
          std::make_unique<ExtensionKeybindingRegistryViews>(
              browser, extensions::ExtensionKeybindingRegistry::ALL_EXTENSIONS,
              focus_manager);
@@ -149,9 +147,9 @@
        "//chrome/browser/ui/fullscreen",
        "//chrome/browser/ui/helium:helium_layout_state_controller",
 +      "//chrome/browser/ui/helium:helium_command_bar",
-       "//chrome/browser/ui/helium:helium_workspaces",
        "//chrome/browser/ui/lens",
        "//chrome/browser/ui/performance_controls",
+       "//chrome/browser/ui/send_tab_to_self",
 
 --- a/chrome/browser/ui/browser_command_controller.cc
 +++ b/chrome/browser/ui/browser_command_controller.cc
@@ -160,14 +158,13 @@
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
 +#include "chrome/browser/ui/helium/helium_command_bar_controller.h"
- #include "chrome/browser/ui/helium/helium_workspace_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_controller.h"
  #include "chrome/browser/ui/managed_ui.h"
-@@ -866,6 +867,16 @@
-               HeliumWorkspaceController::From(browser_)) {
-         workspaces->SwitchToAdjacentWorkspace(
-             id == IDC_HELIUM_NEXT_WORKSPACE ? 1 : -1);
-+      }
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+@@ -858,6 +859,16 @@
+           browser_,
+           TabStripUserGestureDetails(
+               TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));
 +      break;
 +    case IDC_HELIUM_COMMAND_BAR:
 +      if (HeliumCommandBarController* command_bar =
@@ -177,13 +174,14 @@
 +        if (browser_view) {
 +          command_bar->Toggle(browser_view->GetWidget()->GetNativeView());
 +        }
-       }
++      }
        break;
      case IDC_DUPLICATE_TAB:
-@@ -2103,6 +2114,9 @@
-   // feature is off or the window has a single workspace.
-   command_updater_->UpdateCommandEnabled(IDC_HELIUM_NEXT_WORKSPACE, true);
-   command_updater_->UpdateCommandEnabled(IDC_HELIUM_PREVIOUS_WORKSPACE, true);
+       DuplicateTab(browser_);
+@@ -2090,6 +2101,9 @@
+   // These are always enabled; the menu determines their menu item visibility.
+   command_updater_->UpdateCommandEnabled(IDC_UPGRADE_DIALOG, true);
+   command_updater_->UpdateCommandEnabled(IDC_HELIUM_SERVICES_OPEN, true);
 +  // Provisional shortcut; the Cmd+T / Cmd+L takeover arrives with the results
 +  // list.
 +  command_updater_->UpdateCommandEnabled(IDC_HELIUM_COMMAND_BAR, true);
@@ -193,10 +191,10 @@
 
 --- a/chrome/browser/ui/browser_ui_prefs.cc
 +++ b/chrome/browser/ui/browser_ui_prefs.cc
-@@ -158,6 +158,10 @@
-   registry->RegisterDictionaryPref(prefs::kHeliumWorkspacesMetadata);
-   registry->RegisterListPref(prefs::kHeliumWorkspacesOrder);
-   registry->RegisterStringPref(prefs::kHeliumWorkspacesActive, std::string());
+@@ -151,6 +151,10 @@
+   registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, false);
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumShowProgressBar, true);
 +
 +  // Native command bar (Settings > Appearance > Command bar), off by default.
 +  // With it on, Cmd+T / Cmd+L open the bar instead of new-tab / focus-bar.
@@ -207,10 +205,10 @@
 
 --- a/chrome/browser/ui/accelerator_table.cc
 +++ b/chrome/browser/ui/accelerator_table.cc
-@@ -81,6 +81,8 @@
-     {ui::VKEY_LEFT, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN |
-                         ui::EF_PLATFORM_ACCELERATOR,
-      IDC_HELIUM_PREVIOUS_WORKSPACE},
+@@ -75,6 +75,8 @@
+     {ui::VKEY_L, ui::EF_PLATFORM_ACCELERATOR, IDC_FOCUS_LOCATION},
+     {ui::VKEY_L, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
+      IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN},
 +    {ui::VKEY_K, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
 +     IDC_HELIUM_COMMAND_BAR},
      {ui::VKEY_O, ui::EF_PLATFORM_ACCELERATOR, IDC_OPEN_FILE},
@@ -219,10 +217,10 @@
 
 --- a/chrome/browser/ui/cocoa/accelerators_cocoa.mm
 +++ b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
-@@ -119,6 +119,9 @@
-     {IDC_HELIUM_PREVIOUS_WORKSPACE,
-      ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN,
-      ui::VKEY_LEFT},
+@@ -113,6 +113,9 @@
+      ui::VKEY_I},
+ #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+     {IDC_TAB_SEARCH, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN, ui::VKEY_A},
 +    {IDC_HELIUM_COMMAND_BAR,
 +     ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
 +     ui::VKEY_K},
@@ -232,10 +230,10 @@
 
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -645,6 +645,8 @@
+@@ -643,6 +643,8 @@
+       {"verticalCollapseShortcut", IDS_SETTINGS_VERTICAL_COLLAPSE_SHORTCUT},
+       {"minimalLocationBar", IDS_SETTINGS_MINIMAL_LOCATION_BAR},
        {"showProgressBar", IDS_SETTINGS_SHOW_PROGRESS_BAR},
-       {"workspacesEnabled", IDS_SETTINGS_WORKSPACES},
-       {"workspacesEnabledDescription", IDS_SETTINGS_WORKSPACES_DESCRIPTION},
 +      {"commandBarEnabled", IDS_SETTINGS_COMMAND_BAR},
 +      {"commandBarEnabledDescription", IDS_SETTINGS_COMMAND_BAR_DESCRIPTION},
        {"shiftRightClickContextMenu",
@@ -244,8 +242,8 @@
 
 --- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
 +++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
-@@ -73,6 +73,11 @@
-       sub-label="$i18n{workspacesEnabledDescription}">
+@@ -68,6 +68,11 @@
+       label="$i18n{showProgressBar}">
    </settings-toggle-button>
    <settings-toggle-button class="hr"
 +      pref-key="helium.command_bar.enabled"
@@ -259,10 +257,10 @@
 
 --- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -329,6 +329,8 @@
-   (*s_allowlist)[::prefs::kVisualTabSwitcherList] =
+@@ -327,6 +327,8 @@
+   (*s_allowlist)[::prefs::kVisualTabSwitcher] =
        settings_api::PrefType::kBoolean;
-   (*s_allowlist)[::prefs::kHeliumWorkspacesEnabled] =
+   (*s_allowlist)[::prefs::kVisualTabSwitcherList] =
 +      settings_api::PrefType::kBoolean;
 +  (*s_allowlist)[::prefs::kHeliumCommandBarEnabled] =
        settings_api::PrefType::kBoolean;
@@ -271,10 +269,10 @@
 
 --- a/chrome/browser/global_keyboard_shortcuts_mac.mm
 +++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
-@@ -122,6 +122,7 @@
+@@ -120,6 +120,7 @@
+       {false, false, true,  false, kVK_PageUp,            IDC_SELECT_PREVIOUS_TAB},
+       {true,  false, false, true,  kVK_RightArrow,        IDC_SELECT_NEXT_TAB},
        {true,  false, false, true,  kVK_LeftArrow,         IDC_SELECT_PREVIOUS_TAB},
-       {true,  true,  false, true,  kVK_RightArrow,        IDC_HELIUM_NEXT_WORKSPACE},
-       {true,  true,  false, true,  kVK_LeftArrow,         IDC_HELIUM_PREVIOUS_WORKSPACE},
 +      {true,  true,  false, false, kVK_ANSI_K,            IDC_HELIUM_COMMAND_BAR},
        {false, true,  true,  false, kVK_PageDown,          IDC_MOVE_TAB_NEXT},
        {false, true,  true,  false, kVK_PageUp,            IDC_MOVE_TAB_PREVIOUS},
