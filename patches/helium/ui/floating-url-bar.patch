@@ -536,7 +536,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,610 @@
+@@ -0,0 +1,629 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -744,6 +744,25 @@
 +  last_query_ = query;
 +  if (query.empty()) {
 +    last_history_rows_ = history::QueryResults();
++  }
++  // Standard keyword behavior: "keyword␣" enters that scope immediately,
++  // exactly like Tab on the hint row. Only when not already scoped, and
++  // only for real scope keywords, so ordinary multi-word searches never
++  // trip it.
++  if (scope_keyword_.empty() && !query.empty() && query.back() == u' ') {
++    if (auto split = helium_command_bar_model::SplitKeyword(query, false);
++        split && !split->keyword.empty()) {
++      TemplateURLService* template_urls =
++          TemplateURLServiceFactory::GetForProfile(browser_->GetProfile());
++      if (helium_command_bar_model::EngineOwnsKeyword(template_urls,
++                                                      split->keyword) ||
++          (split->keyword == "tab" &&
++           !helium_command_bar_model::EngineOwnsKeyword(template_urls,
++                                                        "tab"))) {
++        EnterScope(split->keyword);
++        return;
++      }
++    }
 +  }
 +  // Paint immediately from the synchronous sources plus the previous
 +  // keystroke's history rows re-scored for this query. Without the
@@ -1777,13 +1796,14 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,452 @@
+@@ -0,0 +1,460 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
 +
 +#include "chrome/browser/ui/helium/helium_command_bar_view.h"
 +
++#include <cstdio>
 +#include <utility>
 +
 +#include "base/functional/bind.h"
@@ -2194,11 +2214,18 @@
 +    case ui::VKEY_DOWN:
 +      MoveSelection(1);
 +      return true;
-+    case ui::VKEY_TAB:
++    case ui::VKEY_TAB: {
++      // TEMPORARY: prove Tab reaches the bar at all (user reports it never
++      // scopes). Remove with the auto-scope evaluation.
++      if (FILE* f = fopen("/tmp/cmdbar.log", "a")) {
++        fprintf(f, "tab key, querylen=%zu\n", sender->GetText().size());
++        fclose(f);
++      }
 +      // Tab enters the hinted scope, or completes the input with the
 +      // selected row's URL. Never moves focus out of the bar.
 +      on_tab_.Run();
 +      return true;
++    }
 +    case ui::VKEY_BACK:
 +      // Backspace on empty input exits the scope; otherwise edit text.
 +      if (sender->GetText().empty() && scope_bar_->GetVisible()) {
