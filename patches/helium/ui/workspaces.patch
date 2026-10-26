@@ -4056,7 +4056,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.cc
-@@ -0,0 +1,800 @@
+@@ -0,0 +1,802 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -4603,8 +4603,8 @@
 +HeliumWorkspaceSwitcherView::HeliumWorkspaceSwitcherView(
 +    BrowserWindowInterface* browser)
 +    : browser_(browser) {
-+  // Dots scroll; the "+" stays pinned after the scroll area so it can never
-+  // scroll out of view. The scroll limit is the plus button, not the last dot.
++  // Dots scroll; the "+" stays pinned at the leading edge, outside the scroll
++  // area, so it never moves or scrolls out of view.
 +  auto* layout = static_cast<views::BoxLayout*>(SetLayoutManager(
 +      std::make_unique<views::BoxLayout>(
 +          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), kDotGap)));
@@ -4671,6 +4671,8 @@
 +      l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_NEW));
 +  add_button->SetPreferredSize(gfx::Size(kDotHitSize, kDotHitSize));
 +  add_button_ = AddChildView(std::move(add_button));
++  // Lock the "+" at the leading edge; the dots scroll to its right.
++  ReorderChildView(add_button_, 0);
 +
 +  HeliumWorkspaceController* controller =
 +      HeliumWorkspaceController::From(browser);
