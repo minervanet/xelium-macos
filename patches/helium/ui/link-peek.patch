@@ -1,0 +1,1114 @@
+--- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
++++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+@@ -35,6 +35,8 @@
+ #include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/helium/helium_link_peek_controller.h"
++#include "chrome/browser/ui/helium/helium_link_peek_modifiers.h"
+ #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
+ #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+ #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
+@@ -540,6 +542,21 @@
+ #if DCHECK_IS_ON()
+   DCHECK(params.Valid());
+ #endif
++
++  // Native link peek: intercept new-tab clicks before any tab opens.
++  if (HeliumLinkPeekController* peek =
++          HeliumLinkPeekController::From(&*browser_)) {
++    const bool is_link_click =
++        ui::PageTransitionCoreTypeIs(params.transition,
++                                    ui::PAGE_TRANSITION_LINK) &&
++        params.is_renderer_initiated && params.user_gesture &&
++        !params.started_from_context_menu;
++    if (is_link_click &&
++        peek->MaybePeek(source, params.url, params.disposition,
++                        helium::LinkPeekModifierHeld())) {
++      return nullptr;
++    }
++  }
+ 
+   if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_DEVTOOLS)) {
+     DevToolsWindow* window = DevToolsWindow::AsDevToolsWindow(source);
+@@ -672,6 +689,21 @@
+     const blink::mojom::WindowFeatures& window_features,
+     bool user_gesture,
+     bool* was_blocked) {
++  // Native link peek: featureless popups become previews instead of windows.
++  if (HeliumLinkPeekController* peek =
++          HeliumLinkPeekController::From(&*browser_)) {
++    const bool has_window_features =
++        window_features.has_x || window_features.has_y ||
++        window_features.has_width || window_features.has_height;
++    if (peek->MaybePeekPopup(source, target_url, has_window_features,
++                             user_gesture, helium::LinkPeekModifierHeld())) {
++      if (was_blocked) {
++        *was_blocked = false;
++      }
++      return nullptr;
++    }
++  }
++
+   FullscreenController* fullscreen_controller =
+       exclusive_access_manager_->fullscreen_controller();
+ #if BUILDFLAG(IS_MAC)
+
+--- a/chrome/browser/ui/browser_window/public/browser_window_features.h
++++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
+@@ -80,6 +80,8 @@
+ class FindBarOwner;
+ class FullscreenControlHost;
+ class HeliumLayoutStateController;
++class HeliumCommandBarController;
++class HeliumLinkPeekController;
+ class HistoryClustersSidePanelCoordinator;
+ class HistorySidePanelCoordinator;
+ class ImmersiveModeController;
+@@ -469,6 +471,12 @@
+       send_tab_to_self_iph_controller_;
+   std::unique_ptr<VerticalTabIphController> vertical_tab_iph_controller_;
+   std::unique_ptr<HeliumLayoutStateController> helium_layout_state_controller_;
++  // Per-window native command bar. Owned here so the command handler can
++  // reach it via HeliumCommandBarController::From(browser).
++  std::unique_ptr<HeliumCommandBarController> helium_command_bar_controller_;
++  // Per-window native link peek. Owned here so the contents delegate can
++  // reach it via HeliumLinkPeekController::From(browser).
++  std::unique_ptr<HeliumLinkPeekController> helium_link_peek_controller_;
+ 
+   std::unique_ptr<tabs::VerticalTabStripStateController>
+       vertical_tab_strip_state_controller_;
+
+--- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
++++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+@@ -81,6 +81,8 @@
+ #include "chrome/browser/ui/focus/browser_focus_controller_webui.h"
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
++#include "chrome/browser/ui/helium/helium_command_bar_controller.h"
++#include "chrome/browser/ui/helium/helium_link_peek_controller.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
+ #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
+@@ -651,7 +653,15 @@
+     helium_layout_state_controller_ =
+         GetUserDataFactory().CreateInstance<HeliumLayoutStateController>(
+             *browser, browser, profile->GetPrefs());
++
++    helium_command_bar_controller_ =
++        GetUserDataFactory().CreateInstance<HeliumCommandBarController>(
++            *browser, browser);
+ 
++    helium_link_peek_controller_ =
++        GetUserDataFactory().CreateInstance<HeliumLinkPeekController>(
++            *browser, browser);
++
+     vertical_tab_strip_state_controller_ =
+         GetUserDataFactory()
+             .CreateInstance<tabs::VerticalTabStripStateControllerImpl>(
+@@ -841,6 +851,9 @@
+         std::make_unique<ExtensionKeybindingRegistryViews>(
+             browser, extensions::ExtensionKeybindingRegistry::ALL_EXTENSIONS,
+             focus_manager);
++    if (helium_command_bar_controller_) {
++      helium_command_bar_controller_->RegisterAccelerators(focus_manager);
++    }
+   }
+ 
+   if (browser_view) {
+
+--- a/chrome/browser/ui/browser_window/internal/BUILD.gn
++++ b/chrome/browser/ui/browser_window/internal/BUILD.gn
+@@ -115,6 +115,8 @@
+       "//chrome/browser/ui/focus",
+       "//chrome/browser/ui/fullscreen",
+       "//chrome/browser/ui/helium:helium_layout_state_controller",
++      "//chrome/browser/ui/helium:helium_command_bar",
++      "//chrome/browser/ui/helium:helium_link_peek",
+       "//chrome/browser/ui/lens",
+       "//chrome/browser/ui/performance_controls",
+       "//chrome/browser/ui/send_tab_to_self",
+
+--- a/chrome/browser/ui/helium/BUILD.gn
++++ b/chrome/browser/ui/helium/BUILD.gn
+@@ -19,3 +19,86 @@
+     "//chrome/common:constants",
+   ]
+ }
++
++source_set("helium_link_peek") {
++  sources = [
++    "helium_link_peek_controller.cc",
++    "helium_link_peek_controller.h",
++    "helium_link_peek_modifiers.h",
++    "helium_link_peek_modifiers_mac.mm",
++    "helium_link_peek_view.cc",
++    "helium_link_peek_view.h",
++  ]
++
++  public_deps = [
++    "//base",
++    "//chrome/browser/ui/browser_window",
++    "//ui/base/unowned_user_data",
++  ]
++
++  deps = [
++    "//chrome/browser/bookmarks",
++    "//chrome/browser/favicon",
++    "//chrome/browser/history",
++    "//chrome/browser/profiles",
++    "//chrome/browser/ui/navigator",
++    "//chrome/browser/ui/tabs:tab_model",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/bookmarks/browser",
++    "//components/favicon/core",
++    "//components/favicon_base",
++    "//components/history/core/browser",
++    "//components/keyed_service/core",
++    "//components/prefs",
++    "//components/search_engines",
++    "//components/tabs:public",
++    "//content/public/browser",
++    "//ui/base",
++    "//ui/color",
++    "//ui/events",
++    "//ui/gfx",
++    "//ui/views",
++  ]
++}
++
++source_set("helium_command_bar") {
++  sources = [
++    "helium_command_bar_controller.cc",
++    "helium_command_bar_controller.h",
++    "helium_command_bar_model.cc",
++    "helium_command_bar_model.h",
++    "helium_command_bar_view.cc",
++    "helium_command_bar_view.h",
++  ]
++
++  public_deps = [
++    "//base",
++    "//chrome/browser/ui/browser_window",
++    "//ui/base/unowned_user_data",
++  ]
++
++  deps = [
++    "//chrome/app/vector_icons",
++    "//chrome/browser/bookmarks",
++    "//chrome/browser/favicon",
++    "//chrome/browser/history",
++    "//chrome/browser/search_engines",
++    "//chrome/browser/ui/navigator",
++    "//chrome/browser/ui/tabs:tab_model",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/bookmarks/browser",
++    "//components/favicon/core",
++    "//components/favicon_base",
++    "//components/history/core/browser",
++    "//components/keyed_service/core",
++    "//components/prefs",
++    "//components/search_engines",
++    "//content/public/browser",
++    "//ui/base",
++    "//ui/color",
++    "//ui/events",
++    "//ui/gfx",
++    "//ui/views",
++  ]
++}
++
+
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -678,7 +678,16 @@
+ // location bar.
+ inline constexpr char kHeliumShowProgressBar[] =
+     "helium.browser.show_progress_bar";
++
++// A boolean pref set to true if the native command bar is enabled. When on,
++// Cmd+T / Cmd+L open the bar instead of their built-in actions.
++inline constexpr char kHeliumCommandBarEnabled[] = "helium.command_bar.enabled";
+ 
++// A boolean pref set to true if the native link peek is enabled. When on,
++// target=_blank, middle-click and Shift+click links open a floating preview
++// instead of navigating immediately.
++inline constexpr char kHeliumLinkPeekEnabled[] = "helium.link_peek.enabled";
++
+ // A boolean pref set to true if a Home button to open the Home pages should be
+ // visible on the toolbar.
+ inline constexpr char kShowHomeButton[] = "browser.show_home_button";
+
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -151,6 +151,14 @@
+   registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, false);
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumShowProgressBar, true);
++
++  // Native command bar (Settings > Appearance > Command bar), off by default.
++  // With it on, Cmd+T / Cmd+L open the bar instead of new-tab / focus-bar.
++  registry->RegisterBooleanPref(prefs::kHeliumCommandBarEnabled, false);
++
++  // Native link peek (Settings > Appearance > Link peek), on by default.
++  // With it on, new-tab clicks open a floating preview instead of navigating.
++  registry->RegisterBooleanPref(prefs::kHeliumLinkPeekEnabled, true);
+ 
+   // Xelium default: at most four pinned tabs per row.
+   registry->RegisterIntegerPref(prefs::kHeliumVerticalPinnedTabsPerRow, 4);
+
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -327,6 +327,10 @@
+   (*s_allowlist)[::prefs::kVisualTabSwitcher] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kVisualTabSwitcherList] =
++      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumCommandBarEnabled] =
++      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumLinkPeekEnabled] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kShiftRightClickContextMenu] =
+       settings_api::PrefType::kBoolean;
+
+--- a/chrome/app/settings_strings.grdp
++++ b/chrome/app/settings_strings.grdp
+@@ -359,7 +359,19 @@
+     </message>
+     <message name="IDS_SETTINGS_SHOW_PROGRESS_BAR" desc="Label for the toggle that shows loading progress in the address bar.">
+       Show loading progress in the address bar
++    </message>
++    <message name="IDS_SETTINGS_COMMAND_BAR" desc="Label for the toggle that enables the native command bar.">
++      Command bar
++    </message>
++    <message name="IDS_SETTINGS_COMMAND_BAR_DESCRIPTION" desc="Description for the command bar toggle in appearance settings.">
++      Open a floating command bar with Cmd+T / Cmd+L instead, anywhere including settings pages
++    </message>
++    <message name="IDS_SETTINGS_LINK_PEEK" desc="Label for the toggle that enables the native link peek preview.">
++      Link peek
+     </message>
++    <message name="IDS_SETTINGS_LINK_PEEK_DESCRIPTION" desc="Description for the link peek toggle in appearance settings.">
++      Preview new-tab links in a floating window instead of opening them right away
++    </message>
+     <message name="IDS_SETTINGS_BROWSER_ZEN_MODE" desc="Label for the toggle that enables zen mode, hiding browser chrome until hover.">
+       Frameless mode
+     </message>
+
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -643,6 +643,10 @@
+       {"verticalCollapseShortcut", IDS_SETTINGS_VERTICAL_COLLAPSE_SHORTCUT},
+       {"minimalLocationBar", IDS_SETTINGS_MINIMAL_LOCATION_BAR},
+       {"showProgressBar", IDS_SETTINGS_SHOW_PROGRESS_BAR},
++      {"commandBarEnabled", IDS_SETTINGS_COMMAND_BAR},
++      {"commandBarEnabledDescription", IDS_SETTINGS_COMMAND_BAR_DESCRIPTION},
++      {"linkPeekEnabled", IDS_SETTINGS_LINK_PEEK},
++      {"linkPeekEnabledDescription", IDS_SETTINGS_LINK_PEEK_DESCRIPTION},
+       {"shiftRightClickContextMenu",
+        IDS_SETTINGS_SHIFT_RIGHT_CLICK_CONTEXT_MENU},
+       {"showZoomIndicator", IDS_SETTINGS_SHOW_ZOOM_INDICATOR},
+
+--- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
++++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
+@@ -68,6 +68,16 @@
+       label="$i18n{showProgressBar}">
+   </settings-toggle-button>
+   <settings-toggle-button class="hr"
++      pref-key="helium.command_bar.enabled"
++      label="$i18n{commandBarEnabled}"
++      sub-label="$i18n{commandBarEnabledDescription}">
++  </settings-toggle-button>
++  <settings-toggle-button class="hr"
++      pref-key="helium.link_peek.enabled"
++      label="$i18n{linkPeekEnabled}"
++      sub-label="$i18n{linkPeekEnabledDescription}">
++  </settings-toggle-button>
++  <settings-toggle-button class="hr"
+       pref-key="helium.browser.zen_mode"
+       label="$i18n{browserZenMode}"
+       sub-label="$i18n{browserZenModeDescription}">
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_link_peek_controller.h
+@@ -0,0 +1,127 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_LINK_PEEK_CONTROLLER_H_
++#define CHROME_BROWSER_UI_HELIUM_HELIUM_LINK_PEEK_CONTROLLER_H_
++
++#include <memory>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/cancelable_task_tracker.h"
++#include "components/favicon_base/favicon_types.h"
++#include "content/public/browser/web_contents_delegate.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
++#include "ui/base/window_open_disposition.h"
++#include "url/gurl.h"
++
++namespace blink {
++namespace mojom {
++class WindowFeatures;
++}  // namespace mojom
++}  // namespace blink
++
++namespace favicon_base {
++struct FaviconImageResult;
++}  // namespace favicon_base
++
++class BrowserWindowInterface;
++
++namespace content {
++class WebContents;
++}  // namespace content
++
++namespace views {
++class Widget;
++}  // namespace views
++
++class HeliumLinkPeekView;
++
++// Blocks popups inside the preview bubble: the bubble is self-contained, and
++// new windows belong in real tabs (openable explicitly from the bubble).
++class PreviewBlocker : public content::WebContentsDelegate {
++ public:
++  PreviewBlocker() = default;
++  PreviewBlocker(const PreviewBlocker&) = delete;
++  PreviewBlocker& operator=(const PreviewBlocker&) = delete;
++  ~PreviewBlocker() override;
++
++  content::WebContents* AddNewContents(
++      content::WebContents* source,
++      std::unique_ptr<content::WebContents> new_contents,
++      const GURL& target_url,
++      WindowOpenDisposition disposition,
++      const blink::mojom::WindowFeatures& window_features,
++      bool user_gesture,
++      bool* was_blocked) override;
++};
++
++// Native link peek: intercepting new-tab clicks and window.open() popups shows
++// a floating preview of the target page instead of navigating immediately.
++// Opening from the preview adopts the already-loaded WebContents (no reload),
++// and splitting inserts it into a real Helium split view. This replaces the
++// DiaPeek extension's content-script + iframe approach, which cannot run on
++// chrome:// pages or the new tab page and fakes splits with CSS.
++class HeliumLinkPeekController : public content::WebContentsObserver {
++ public:
++  DECLARE_USER_DATA(HeliumLinkPeekController);
++
++  static HeliumLinkPeekController* From(BrowserWindowInterface* browser);
++
++  explicit HeliumLinkPeekController(BrowserWindowInterface* browser);
++  HeliumLinkPeekController(const HeliumLinkPeekController&) = delete;
++  HeliumLinkPeekController& operator=(const HeliumLinkPeekController&) =
++      delete;
++  ~HeliumLinkPeekController() override;
++
++  // Interception entry points, called from BrowserWebContentsDelegate.
++  // Returns true when the navigation was consumed by a peek preview.
++  // |modifier_held| is true when Cmd/Ctrl/Alt is down: those clicks keep
++  // their native behavior (instant tab, context menu, native split).
++  bool MaybePeek(content::WebContents* source,
++                 const GURL& url,
++                 WindowOpenDisposition disposition,
++                 bool modifier_held);
++  bool MaybePeekPopup(content::WebContents* source,
++                      const GURL& target_url,
++                      bool has_window_features,
++                      bool user_gesture,
++                      bool modifier_held);
++
++  void OpenInNewTab(bool foreground);
++  void OpenInSplit();
++  void CopyLink();
++  void Close();
++
++  bool IsShowing() const { return widget_ != nullptr; }
++
++  base::WeakPtr<HeliumLinkPeekController> GetWeakPtr();
++
++  // content::WebContentsObserver (observes the preview while visible):
++  void DidFinishNavigation(
++      content::NavigationHandle* navigation_handle) override;
++
++ private:
++  void Show(content::WebContents* source, const GURL& url);
++  void UpdateTitleAndIcon();
++  void OnWidgetClosed();
++  void FetchFavicons();
++  void OnFavicon(const favicon_base::FaviconImageResult& result);
++
++  raw_ptr<BrowserWindowInterface> browser_;
++  // Owned by the widget (deleted on close); null when hidden.
++  raw_ptr<views::Widget> widget_ = nullptr;
++  raw_ptr<HeliumLinkPeekView> view_ = nullptr;
++  // The live preview. Adopted by the tab strip on open, destroyed on close.
++  std::unique_ptr<content::WebContents> preview_contents_;
++  GURL preview_url_;
++  PreviewBlocker preview_blocker_;
++  base::CancelableTaskTracker favicon_tracker_;
++  ui::ScopedUnownedUserData<HeliumLinkPeekController> scoped_unowned_user_data_;
++  base::WeakPtrFactory<HeliumLinkPeekController> weak_factory_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_HELIUM_HELIUM_LINK_PEEK_CONTROLLER_H_
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_link_peek_controller.cc
+@@ -0,0 +1,289 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/helium_link_peek_controller.h"
++
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/favicon/favicon_service_factory.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/helium/helium_link_peek_view.h"
++#include "chrome/browser/ui/tabs/split_tab_metrics.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/common/pref_names.h"
++#include "components/favicon/core/favicon_service.h"
++#include "components/keyed_service/core/service_access_type.h"
++#include "components/prefs/pref_service.h"
++#include "components/split_tabs/split_tab_visual_data.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/web_contents_delegate.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/clipboard/scoped_clipboard_writer.h"
++#include "ui/base/page_transition_types.h"
++#include "ui/views/widget/widget.h"
++
++namespace {
++
++// File types that download instead of rendering. Peeking those would either
++// start a download or show a viewer for a file the user wanted saved, so
++// they fall through to the normal path (same spirit as DiaPeek's blocklist).
++bool IsDownloadUrl(const GURL& url) {
++  const std::string spec = url.spec();
++  const size_t slash = spec.find_last_of('/');
++  const size_t dot = spec.find_last_of('.');
++  if (dot == std::string::npos ||
++      (slash != std::string::npos && dot < slash)) {
++    return false;
++  }
++  std::string ext =
++      base::ToLowerASCII(spec.substr(dot + 1, spec.find_first_of("?#", dot)));
++  if (ext.empty() || ext == "htm" || ext == "html" || ext == "xhtml") {
++    return false;
++  }
++  static constexpr const char* kBlocked[] = {
++      "exe", "msi", "dmg", "pkg", "apk", "zip", "rar",
++      "7z",  "tar", "gz",  "bz2", "xz",  "iso",
++  };
++  for (const char* blocked : kBlocked) {
++    if (ext == blocked) {
++      return true;
++    }
++  }
++  return false;
++}
++
++}  // namespace
++
++DEFINE_USER_DATA(HeliumLinkPeekController);
++
++PreviewBlocker::~PreviewBlocker() = default;
++
++content::WebContents* PreviewBlocker::AddNewContents(
++    content::WebContents* source,
++    std::unique_ptr<content::WebContents> new_contents,
++    const GURL& target_url,
++    WindowOpenDisposition disposition,
++    const blink::mojom::WindowFeatures& window_features,
++    bool user_gesture,
++    bool* was_blocked) {
++  // Popups inside the preview are swallowed; the bubble is self-contained.
++  if (was_blocked) {
++    *was_blocked = true;
++  }
++  return nullptr;
++}
++
++// static
++HeliumLinkPeekController* HeliumLinkPeekController::From(
++    BrowserWindowInterface* browser) {
++  if (!browser) {
++    return nullptr;
++  }
++  return HeliumLinkPeekController::Get(browser->GetUnownedUserDataHost());
++}
++
++HeliumLinkPeekController::HeliumLinkPeekController(
++    BrowserWindowInterface* browser)
++    : content::WebContentsObserver(nullptr),
++      browser_(browser),
++      scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this) {}
++
++HeliumLinkPeekController::~HeliumLinkPeekController() = default;
++
++bool HeliumLinkPeekController::MaybePeek(content::WebContents* source,
++                                         const GURL& url,
++                                         WindowOpenDisposition disposition,
++                                         bool modifier_held) {
++  if (IsShowing() || modifier_held) {
++    return false;
++  }
++  if (disposition != WindowOpenDisposition::NEW_FOREGROUND_TAB &&
++      disposition != WindowOpenDisposition::NEW_BACKGROUND_TAB &&
++      disposition != WindowOpenDisposition::NEW_WINDOW) {
++    return false;
++  }
++  if (!browser_->GetProfile()->GetPrefs()->GetBoolean(
++          prefs::kHeliumLinkPeekEnabled)) {
++    return false;
++  }
++  if (!url.SchemeIsHTTPOrHTTPS() || IsDownloadUrl(url)) {
++    return false;
++  }
++  Show(source, url);
++  return true;
++}
++
++bool HeliumLinkPeekController::MaybePeekPopup(content::WebContents* source,
++                                              const GURL& target_url,
++                                              bool has_window_features,
++                                              bool user_gesture,
++                                              bool modifier_held) {
++  if (IsShowing() || modifier_held || !user_gesture || has_window_features) {
++    return false;
++  }
++  if (!browser_->GetProfile()->GetPrefs()->GetBoolean(
++          prefs::kHeliumLinkPeekEnabled)) {
++    return false;
++  }
++  if (!target_url.SchemeIsHTTPOrHTTPS() || IsDownloadUrl(target_url)) {
++    return false;
++  }
++  // The renderer's own WebContents is discarded; the preview loads the target
++  // directly so open/split adopt the finished page with no reload.
++  Show(source, target_url);
++  return true;
++}
++
++void HeliumLinkPeekController::Show(content::WebContents* source,
++                                    const GURL& url) {
++  preview_url_ = url;
++  content::WebContents::CreateParams params(browser_->GetProfile());
++  preview_contents_ = content::WebContents::Create(params);
++  preview_contents_->SetDelegate(&preview_blocker_);
++  content::NavigationController::LoadURLParams load_params(url);
++  load_params.transition_type = ui::PAGE_TRANSITION_LINK;
++  preview_contents_->GetController().LoadURLWithParams(load_params);
++  Observe(preview_contents_.get());
++
++  gfx::NativeView parent;
++  bool has_parent = false;
++  if (auto* tab_strip = browser_->GetTabStripModel()) {
++    if (content::WebContents* active = tab_strip->GetActiveWebContents()) {
++      parent = active->GetNativeView();
++      has_parent = true;
++    }
++  }
++  if (!has_parent && source) {
++    parent = source->GetNativeView();
++    has_parent = true;
++  }
++  if (!has_parent) {
++    return;
++  }
++  view_ = HeliumLinkPeekView::Show(
++      parent, preview_contents_.get(), browser_->GetProfile(),
++      base::BindOnce(&HeliumLinkPeekController::OnWidgetClosed,
++                     weak_factory_.GetWeakPtr()),
++      base::BindRepeating(&HeliumLinkPeekController::OpenInNewTab,
++                          weak_factory_.GetWeakPtr()),
++      base::BindRepeating(&HeliumLinkPeekController::OpenInSplit,
++                          weak_factory_.GetWeakPtr()),
++      base::BindRepeating(&HeliumLinkPeekController::CopyLink,
++                          weak_factory_.GetWeakPtr()));
++  widget_ = view_->GetWidget();
++  UpdateTitleAndIcon();
++}
++
++void HeliumLinkPeekController::OpenInNewTab(bool foreground) {
++  if (!preview_contents_) {
++    return;
++  }
++  TabStripModel* tab_strip = browser_->GetTabStripModel();
++  if (!tab_strip) {
++    return;
++  }
++  const int index = tab_strip->active_index() + 1;
++  const int add_types =
++      foreground ? AddTabTypes::ADD_ACTIVE : AddTabTypes::ADD_NONE;
++  auto group = tab_strip->GetTabGroupForTab(tab_strip->active_index());
++  auto contents = std::move(preview_contents_);
++  Observe(nullptr);
++  view_->DetachPreview();
++  tab_strip->InsertWebContentsAt(index, std::move(contents), add_types, group);
++  Close();
++}
++
++void HeliumLinkPeekController::OpenInSplit() {
++  if (!preview_contents_) {
++    return;
++  }
++  TabStripModel* tab_strip = browser_->GetTabStripModel();
++  if (!tab_strip) {
++    return;
++  }
++  const int active_index = tab_strip->active_index();
++  auto group = tab_strip->GetTabGroupForTab(active_index);
++  auto contents = std::move(preview_contents_);
++  Observe(nullptr);
++  view_->DetachPreview();
++  const int new_index = tab_strip->InsertWebContentsAt(
++      active_index + 1, std::move(contents), AddTabTypes::ADD_ACTIVE, group);
++  tab_strip->AddToNewSplit(
++      {active_index, new_index},
++      split_tabs::SplitTabVisualData(split_tabs::SplitTabLayout::kSideBySide),
++      split_tabs::SplitTabCreatedSource::kLinkClick);
++  Close();
++}
++
++void HeliumLinkPeekController::CopyLink() {
++  ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
++  writer.WriteText(base::UTF8ToUTF16(preview_url_.spec()));
++}
++
++void HeliumLinkPeekController::Close() {
++  if (!widget_) {
++    return;
++  }
++  views::Widget* widget = widget_;
++  widget_ = nullptr;
++  view_ = nullptr;
++  widget->Close();
++}
++
++void HeliumLinkPeekController::OnWidgetClosed() {
++  widget_ = nullptr;
++  view_ = nullptr;
++  Observe(nullptr);
++  preview_contents_.reset();
++}
++
++void HeliumLinkPeekController::UpdateTitleAndIcon() {
++  if (!view_ || !preview_contents_) {
++    return;
++  }
++  std::u16string title = preview_contents_->GetTitle();
++  if (title.empty()) {
++    title = base::UTF8ToUTF16(preview_url_.spec());
++  }
++  view_->SetTitle(title);
++  if (preview_url_.SchemeIsHTTPOrHTTPS()) {
++    if (favicon::FaviconService* favicons =
++            FaviconServiceFactory::GetForProfile(
++                browser_->GetProfile(),
++                ServiceAccessType::EXPLICIT_ACCESS)) {
++      favicons->GetFaviconImageForPageURL(
++          preview_url_,
++          base::BindOnce(&HeliumLinkPeekController::OnFavicon,
++                         weak_factory_.GetWeakPtr()),
++          &favicon_tracker_);
++    }
++  }
++}
++
++void HeliumLinkPeekController::OnFavicon(
++    const favicon_base::FaviconImageResult& result) {
++  if (!result.image.IsEmpty() && view_) {
++    view_->SetIcon(result.image);
++  }
++}
++
++void HeliumLinkPeekController::DidFinishNavigation(
++    content::NavigationHandle* navigation_handle) {
++  if (navigation_handle && navigation_handle->HasCommitted() &&
++      !navigation_handle->IsErrorPage()) {
++    UpdateTitleAndIcon();
++  }
++}
++
++base::WeakPtr<HeliumLinkPeekController> HeliumLinkPeekController::GetWeakPtr() {
++  return weak_factory_.GetWeakPtr();
++}
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_link_peek_modifiers.h
+@@ -0,0 +1,17 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_LINK_PEEK_MODIFIERS_H_
++#define CHROME_BROWSER_UI_HELIUM_HELIUM_LINK_PEEK_MODIFIERS_H_
++
++namespace helium {
++
++// True while Cmd, Ctrl or Alt is held. Link clicks with those modifiers keep
++// their native behavior (instant background tab, context menu, native split
++// view) instead of opening a peek preview.
++bool LinkPeekModifierHeld();
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_HELIUM_LINK_PEEK_MODIFIERS_H_
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_link_peek_modifiers_mac.mm
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/helium_link_peek_modifiers.h"
++
++#import <AppKit/AppKit.h>
++
++namespace helium {
++
++bool LinkPeekModifierHeld() {
++  const NSEventModifierFlags flags = [NSEvent modifierFlags];
++  constexpr NSEventModifierFlags kBypassFlags =
++      NSEventModifierFlagCommand | NSEventModifierFlagControl |
++      NSEventModifierFlagOption;
++  return (flags & kBypassFlags) != 0;
++}
++
++}  // namespace helium
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_link_peek_view.h
+@@ -0,0 +1,93 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_LINK_PEEK_VIEW_H_
++#define CHROME_BROWSER_UI_HELIUM_HELIUM_LINK_PEEK_VIEW_H_
++
++#include <memory>
++#include <string>
++
++#include "base/functional/callback_forward.h"
++#include "base/memory/raw_ptr.h"
++#include "ui/views/controls/textfield/textfield_controller.h"
++#include "ui/views/widget/widget_delegate.h"
++#include "ui/views/widget/widget_observer.h"
++
++namespace gfx {
++class Image;
++class Rect;
++}  // namespace gfx
++
++namespace content {
++class WebContents;
++}  // namespace content
++
++class Profile;
++
++namespace views {
++class ImageView;
++class Label;
++class LabelButton;
++class View;
++class WebView;
++class Widget;
++}  // namespace views
++
++// Floating peek bubble: a header row (favicon, title, actions) above the
++// live preview page. Owned by the popup widget; the controller owns the
++// preview WebContents and lends it here for display.
++class HeliumLinkPeekView : public views::WidgetDelegate,
++                           public views::WidgetObserver,
++                           public ui::AcceleratorTarget {
++ public:
++  // Shows the bubble for |preview| parented under |parent| and returns the
++  // owning view (owned by the widget, deleted on close). |on_closed| runs
++  // when the widget begins closing.
++  static HeliumLinkPeekView* Show(
++      gfx::NativeView parent,
++      content::WebContents* preview,
++      Profile* profile,
++      base::OnceClosure on_closed,
++      base::RepeatingCallback<void(bool)> on_open_tab,
++      base::RepeatingClosure on_open_split,
++      base::RepeatingClosure on_copy_link);
++
++  HeliumLinkPeekView(const HeliumLinkPeekView&) = delete;
++  HeliumLinkPeekView& operator=(const HeliumLinkPeekView&) = delete;
++  ~HeliumLinkPeekView() override;
++
++  void Close();
++  // Detaches the preview WebContents (for tab/split adoption); the bubble
++  // must close immediately after.
++  void DetachPreview();
++  void SetTitle(const std::u16string& title);
++  void SetIcon(const gfx::Image& image);
++
++  // views::WidgetDelegate:
++  // ui::AcceleratorTarget:
++  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
++  bool CanHandleAccelerators() const override;
++
++ private:
++  HeliumLinkPeekView(gfx::NativeView parent,
++                     content::WebContents* preview,
++                     Profile* profile,
++                     base::OnceClosure on_closed,
++                     base::RepeatingCallback<void(bool)> on_open_tab,
++                     base::RepeatingClosure on_open_split,
++                     base::RepeatingClosure on_copy_link);
++
++  void WindowClosing() override;
++  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
++
++  base::OnceClosure on_closed_;
++  base::RepeatingCallback<void(bool)> on_open_tab_;
++  base::RepeatingClosure on_open_split_;
++  base::RepeatingClosure on_copy_link_;
++  raw_ptr<views::ImageView> icon_ = nullptr;
++  raw_ptr<views::Label> title_ = nullptr;
++  raw_ptr<views::WebView> web_view_ = nullptr;
++};
++
++#endif  // CHROME_BROWSER_UI_HELIUM_HELIUM_LINK_PEEK_VIEW_H_
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_link_peek_view.cc
+@@ -0,0 +1,215 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/helium_link_peek_view.h"
++
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "chrome/app/vector_icons/vector_icons.h"
++#include "chrome/browser/profiles/profile.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/accelerators/accelerator.h"
++#include "ui/base/accelerators/accelerator_manager.h"
++#include "ui/base/models/image_model.h"
++#include "ui/color/color_id.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/image/image.h"
++#include "ui/views/background.h"
++#include "ui/views/border.h"
++#include "ui/views/controls/button/label_button.h"
++#include "ui/views/controls/image_view.h"
++#include "ui/views/controls/label.h"
++#include "ui/views/controls/webview/webview.h"
++#include "ui/views/focus/focus_manager.h"
++#include "ui/views/layout/box_layout.h"
++#include "ui/views/view_class_properties.h"
++#include "ui/views/widget/widget.h"
++#include "third_party/skia/include/core/SkColor.h"
++
++namespace {
++
++// Matches the command bar bubble.
++constexpr int kPopupWidth = 760;
++constexpr int kPopupHeight = 560;
++constexpr int kBubbleRadius = 16;
++constexpr int kHeaderHeight = 40;
++constexpr int kIconSize = 16;
++
++views::LabelButton* ActionButton(const std::u16string& text,
++                                 views::View* parent,
++                                 base::RepeatingClosure pressed) {
++  auto* button = parent->AddChildView(std::make_unique<views::LabelButton>(
++      std::move(pressed), text));
++  return button;
++}
++
++}  // namespace
++
++// static
++HeliumLinkPeekView* HeliumLinkPeekView::Show(
++    gfx::NativeView parent,
++    content::WebContents* preview,
++    Profile* profile,
++    base::OnceClosure on_closed,
++    base::RepeatingCallback<void(bool)> on_open_tab,
++    base::RepeatingClosure on_open_split,
++    base::RepeatingClosure on_copy_link) {
++  auto delegate = std::unique_ptr<HeliumLinkPeekView>(new HeliumLinkPeekView(
++      parent, preview, profile, std::move(on_closed), std::move(on_open_tab),
++      std::move(on_open_split), std::move(on_copy_link)));
++  HeliumLinkPeekView* view = delegate.get();
++  views::Widget* widget = new views::Widget;
++  views::Widget::InitParams params(
++      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
++      views::Widget::InitParams::TYPE_POPUP);
++  params.parent = parent;
++  params.delegate = delegate.release();
++  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
++  params.shadow_type = views::Widget::InitParams::ShadowType::kDrop;
++  params.activatable = views::Widget::InitParams::Activatable::kYes;
++  widget->Init(std::move(params));
++
++  const gfx::Rect parent_bounds =
++      views::Widget::GetWidgetForNativeView(parent)->GetWindowBoundsInScreen();
++  widget->SetBounds(gfx::Rect(
++      parent_bounds.x() + (parent_bounds.width() - kPopupWidth) / 2,
++      parent_bounds.y() + parent_bounds.height() / 6, kPopupWidth,
++      kPopupHeight));
++  widget->Show();
++  widget->AddObserver(view);
++  widget->GetFocusManager()->RegisterAccelerator(
++      ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE),
++      ui::AcceleratorManager::kNormalPriority, view);
++  view->web_view_->RequestFocus();
++  return view;
++}
++
++HeliumLinkPeekView::HeliumLinkPeekView(
++    gfx::NativeView parent,
++    content::WebContents* preview,
++    Profile* profile,
++    base::OnceClosure on_closed,
++    base::RepeatingCallback<void(bool)> on_open_tab,
++    base::RepeatingClosure on_open_split,
++    base::RepeatingClosure on_copy_link)
++    : on_closed_(std::move(on_closed)),
++      on_open_tab_(std::move(on_open_tab)),
++      on_open_split_(std::move(on_open_split)),
++      on_copy_link_(std::move(on_copy_link)) {
++  SetModalType(ui::mojom::ModalType::kNone);
++  auto contents = std::make_unique<views::View>();
++  contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kVertical, gfx::Insets(8), 4));
++  contents->SetBackground(views::CreateRoundedRectBackground(
++      ui::kColorBubbleBackground, kBubbleRadius));
++  contents->SetBorder(views::CreateRoundedRectBorder(
++      1, kBubbleRadius, ui::kColorBubbleBorder));
++
++  auto* header = contents->AddChildView(std::make_unique<views::View>());
++  header->SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(0, 4), 8));
++  header->SetPreferredSize(gfx::Size(kPopupWidth, kHeaderHeight));
++  icon_ = header->AddChildView(std::make_unique<views::ImageView>());
++  icon_->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
++  icon_->SetImageSize(gfx::Size(kIconSize, kIconSize));
++  icon_->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
++  icon_->SetImage(ui::ImageModel::FromVectorIcon(
++      kGlobeIcon, ui::kColorMenuIcon, kIconSize));
++  title_ = header->AddChildView(std::make_unique<views::Label>());
++  title_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  title_->SetElideBehavior(gfx::ELIDE_TAIL);
++  title_->SetProperty(
++      views::kFlexBehaviorKey,
++      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
++                               views::MaximumFlexSizeRule::kUnbounded));
++  // "Open in new tab" isn't separately labeled background/foreground: the
++  // keyboard shortcut-less bubble keeps the primary action obvious.
++  ActionButton(u"New Tab", header,
++               base::BindRepeating(
++                   [](HeliumLinkPeekView* view) {
++                     view->on_open_tab_.Run(true);
++                   },
++                   base::Unretained(this)));
++  ActionButton(u"Split", header,
++               base::BindRepeating(
++                   [](HeliumLinkPeekView* view) { view->on_open_split_.Run(); },
++                   base::Unretained(this)));
++  ActionButton(u"Copy Link", header,
++               base::BindRepeating(
++                   [](HeliumLinkPeekView* view) { view->on_copy_link_.Run(); },
++                   base::Unretained(this)));
++  ActionButton(u"Close", header,
++               base::BindRepeating(
++                   [](HeliumLinkPeekView* view) { view->Close(); },
++                   base::Unretained(this)));
++
++  auto web_view = std::make_unique<views::WebView>(profile);
++  web_view->SetWebContents(preview);
++  // No fixed height: flex fills whatever the fixed-size popup leaves over.
++  web_view->SetProperty(
++      views::kFlexBehaviorKey,
++      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
++                               views::MaximumFlexSizeRule::kUnbounded));
++  web_view_ = web_view.get();
++  contents->AddChildView(std::move(web_view));
++  SetContentsView(std::move(contents));
++}
++
++HeliumLinkPeekView::~HeliumLinkPeekView() {
++  if (GetWidget() && GetWidget()->GetFocusManager()) {
++    GetWidget()->GetFocusManager()->UnregisterAccelerators(this);
++  }
++}
++
++void HeliumLinkPeekView::Close() {
++  if (GetWidget()) {
++    GetWidget()->Close();
++  }
++}
++
++void HeliumLinkPeekView::DetachPreview() {
++  if (web_view_ && web_view_->GetWebContents()) {
++    web_view_->SetWebContents(nullptr);
++  }
++}
++
++void HeliumLinkPeekView::SetTitle(const std::u16string& title) {
++  if (title_) {
++    title_->SetText(title.empty() ? u"Loading\u2026" : title);
++  }
++}
++
++void HeliumLinkPeekView::SetIcon(const gfx::Image& image) {
++  if (!image.IsEmpty() && icon_) {
++    icon_->SetImage(ui::ImageModel::FromImageSkia(*image.ToImageSkia()));
++  }
++}
++
++bool HeliumLinkPeekView::AcceleratorPressed(const ui::Accelerator& accelerator) {
++  if (accelerator.key_code() == ui::VKEY_ESCAPE) {
++    Close();
++    return true;
++  }
++  return false;
++}
++
++bool HeliumLinkPeekView::CanHandleAccelerators() const {
++  return true;
++}
++
++void HeliumLinkPeekView::WindowClosing() {
++  if (GetWidget()) {
++    GetWidget()->RemoveObserver(this);
++  }
++  std::move(on_closed_).Run();
++}
++
++void HeliumLinkPeekView::OnWidgetActivationChanged(views::Widget* widget,
++                                                   bool active) {
++  if (!active) {
++    Close();
++  }
++}
+
