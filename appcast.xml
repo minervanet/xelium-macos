@@ -7,16 +7,8 @@
     <link>https://github.com/minervanet/xelium-macos</link>
     <description>Xelium release feed</description>
     <language>en</language>
-    <item>
-      <title>Xelium 0.20.1.1</title>
-      <pubDate>Sun, 25 Oct 2026 23:18:30 +0000</pubDate>
-      <sparkle:version>202610260613</sparkle:version>
-      <sparkle:shortVersionString>0.20.1.1</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/minervanet/xelium-macos/releases/download/v0.20.1.1/Xelium-0.20.1.1-arm64.dmg"
-                 sparkle:edSignature="Hhk+2rFL8koWvXfsZ+4++Ecxcz5RiWzj/a2cYUqhgbEjUl3A04e76g4tenS5qAiNnxaNvlqNYyJzYaA3Bl7nDA=="
-                 length="125053601"
-                 type="application/octet-stream" />
-    </item>
+    <!-- No releases: the feed is intentionally empty until the new
+         release flow replaces it. An empty feed means Sparkle finds no
+         updates, which is exactly what dev builds need. -->
   </channel>
 </rss>
