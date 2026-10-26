@@ -1177,7 +1177,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,317 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1190,10 +1190,13 @@
 +#include "base/strings/utf_string_conversions.h"
 +#include "ui/base/metadata/metadata_impl_macros.h"
 +#include "ui/base/models/image_model.h"
++#include "ui/color/color_id.h"
 +#include "ui/events/event.h"
 +#include "ui/events/keycodes/keyboard_codes.h"
 +#include "ui/gfx/font_list.h"
 +#include "ui/gfx/geometry/rect.h"
++#include "ui/views/background.h"
++#include "ui/views/border.h"
 +#include "ui/views/controls/image_view.h"
 +#include "ui/views/controls/label.h"
 +#include "ui/views/controls/textfield/textfield.h"
@@ -1206,9 +1209,12 @@
 +// Matches Lumno's panel density. Rows are a fixed height; the popup grows
 +// with the result count and clips extras instead of scrolling.
 +constexpr int kBarWidth = 560;
-+constexpr int kInputHeight = 40;
-+constexpr int kRowHeight = 46;
-+constexpr int kHorizontalPadding = 12;
++constexpr int kInputHeight = 48;
++constexpr int kRowHeight = 52;
++constexpr int kHorizontalPadding = 8;
++constexpr int kBubbleRadius = 16;
++constexpr int kRowRadius = 8;
++constexpr int kTagWidth = 88;
 +
 +const char* TagForType(HeliumCommandBarItem::Type type) {
 +  switch (type) {
@@ -1234,11 +1240,16 @@
 + public:
 +  ResultRowView(HeliumCommandBarItem item,
 +                base::RepeatingClosure on_click) {
-+    SetLayoutManager(std::make_unique<views::BoxLayout>(
-+        views::BoxLayout::Orientation::kHorizontal,
-+        gfx::Insets::VH(4, kHorizontalPadding), 8));
++    auto* layout = static_cast<views::BoxLayout*>(SetLayoutManager(
++        std::make_unique<views::BoxLayout>(
++            views::BoxLayout::Orientation::kHorizontal,
++            gfx::Insets::VH(4, kHorizontalPadding), 8)));
++    layout->set_cross_axis_alignment(
++        views::BoxLayout::CrossAxisAlignment::kCenter);
++    // Fix the cross-axis so the column widths below stay stable.
++    SetPreferredSize(gfx::Size(kBarWidth - 2 * kHorizontalPadding, kRowHeight));
 +    marker_ = AddChildView(std::make_unique<views::Label>(u""));
-+    marker_->SetPreferredSize(gfx::Size(12, kRowHeight));
++    marker_->SetPreferredSize(gfx::Size(16, kRowHeight));
 +    icon_ = AddChildView(std::make_unique<views::ImageView>());
 +    icon_->SetPreferredSize(gfx::Size(16, 16));
 +    icon_->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
@@ -1268,7 +1279,13 @@
 +    auto* tag = AddChildView(std::make_unique<views::Label>(
 +        base::UTF8ToUTF16(TagForType(item.type)),
 +        views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
++    tag->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
++    tag->SetElideBehavior(gfx::ELIDE_TAIL);
 +    tag->SetFontList(tag->font_list().DeriveWithSizeDelta(-1));
++    // Fixed width, vertically centered by the row's cross-axis alignment, so
++    // the tag never drifts into the title or URL.
++    tag->SetPreferredSize(
++        gfx::Size(kTagWidth, url->GetPreferredSize().height()));
 +    SetPreferredSize(
 +        gfx::Size(kBarWidth - 2 * kHorizontalPadding, kRowHeight));
 +    on_click_ = std::move(on_click);
@@ -1279,6 +1296,12 @@
 +    marker_->SetText(selected ? u"\u2192" : u"");
 +    title_->SetFontList(title_->font_list().DeriveWithWeight(
 +        selected ? gfx::Font::Weight::BOLD : gfx::Font::Weight::NORMAL));
++    if (selected) {
++      SetBackground(views::CreateRoundedRectBackground(
++          ui::kColorAppMenuRowBackgroundHovered, kRowRadius));
++    } else {
++      SetBackground(nullptr);
++    }
 +  }
 +
 +  void SetImage(const gfx::Image& image) {
@@ -1353,7 +1376,12 @@
 +  SetModalType(ui::mojom::ModalType::kNone);
 +  auto contents = std::make_unique<views::View>();
 +  contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
-+      views::BoxLayout::Orientation::kVertical, gfx::Insets::VH(8, 12), 0));
++      views::BoxLayout::Orientation::kVertical, gfx::Insets(8), 4));
++  // Opaque bubble so page content never bleeds through the results.
++  contents->SetBackground(views::CreateRoundedRectBackground(
++      ui::kColorBubbleBackground, kBubbleRadius));
++  contents->SetBorder(views::CreateRoundedRectBorder(
++      1, kBubbleRadius, ui::kColorBubbleBorder));
 +  auto input = std::make_unique<views::Textfield>();
 +  input->SetPlaceholderText(u"Search or type a URL...");
 +  input->SetPreferredSize(gfx::Size(kBarWidth, kInputHeight));
