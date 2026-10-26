@@ -365,7 +365,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.h
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,165 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -451,12 +451,10 @@
 +  // history asynchronously. Called by the view on every keystroke.
 +  void OnQueryChanged(const std::u16string& query);
 +  // Activates items_[index] (opens, switches, searches or copies), then
-+  // closes the bar. Does exactly what the selected row advertises; Tab
-+  // enters scopes explicitly via EnterScope instead.
++  // closes the bar. Does exactly what the selected row advertises; scopes
++  // are entered via trailing Space or EnterScope instead (Tab never
++  // reaches the bar on macOS).
 +  void ActivateItem(size_t index);
-+  // Tab key: enters the hinted scope, or completes the input with the
-+  // selected row's URL.
-+  void OnTabPressed();
 +  // Esc (or Backspace on empty input while scoped): exits the scope, else
 +  // closes the bar.
 +  void OnEscapePressed();
@@ -536,7 +534,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,629 @@
+@@ -0,0 +1,599 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -650,8 +648,6 @@
 +      base::BindRepeating(&HeliumCommandBarController::OnQueryChanged,
 +                          weak_factory_.GetWeakPtr()),
 +      base::BindRepeating(&HeliumCommandBarController::ActivateItem,
-+                          weak_factory_.GetWeakPtr()),
-+      base::BindRepeating(&HeliumCommandBarController::OnTabPressed,
 +                          weak_factory_.GetWeakPtr()),
 +      base::BindRepeating(&HeliumCommandBarController::OnEscapePressed,
 +                          weak_factory_.GetWeakPtr()));
@@ -865,34 +861,6 @@
 +  }
 +}
 +
-+void HeliumCommandBarController::OnTabPressed() {
-+  if (!view_) {
-+    return;
-+  }
-+  if (scope_hint_index_.has_value() &&
-+      *scope_hint_index_ < items_.size()) {
-+    // Tab always enters the scope explicitly — the standard browser
-+    // behavior. Range-checked: the hint index belongs to the current list.
-+    EnterScope(items_[*scope_hint_index_].site_keyword);
-+    return;
-+  }
-+  // No hint row (clipped, or list not yet built): Tab still scopes when the
-+  // query itself is a scope keyword, so scoping never depends on row luck.
-+  if (auto split = helium_command_bar_model::SplitKeyword(last_query_, false);
-+      split && !split->keyword.empty()) {
-+    TemplateURLService* template_urls =
-+        TemplateURLServiceFactory::GetForProfile(browser_->GetProfile());
-+    if (helium_command_bar_model::EngineOwnsKeyword(template_urls,
-+                                                    split->keyword) ||
-+        (split->keyword == "tab" &&
-+         !helium_command_bar_model::EngineOwnsKeyword(template_urls,
-+                                                      "tab"))) {
-+      EnterScope(split->keyword);
-+      return;
-+    }
-+  }
-+  view_->CompleteSelection();
-+}
 +
 +void HeliumCommandBarController::EnterScope(const std::string& keyword) {
 +  if (keyword.empty()) {
@@ -1686,7 +1654,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.h
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,100 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1733,7 +1701,6 @@
 +      base::OnceClosure on_closed,
 +      base::RepeatingCallback<void(const std::u16string&)> on_query,
 +      base::RepeatingCallback<void(size_t)> on_activate,
-+      base::RepeatingClosure on_tab,
 +      base::RepeatingClosure on_escape);
 +
 +  HeliumCommandBarView(const HeliumCommandBarView&) = delete;
@@ -1748,8 +1715,6 @@
 +                  std::optional<size_t> scope_hint);
 +  // Sets the input text (Tab completion).
 +  void SetInputText(const std::u16string& text);
-+  // Completes the input with the selected row's URL, if any.
-+  void CompleteSelection();
 +  // Shows the scope bar for |name|; ClearScope hides it again.
 +  void SetScope(const std::u16string& name);
 +  void ClearScope();
@@ -1769,7 +1734,6 @@
 +                       base::RepeatingCallback<void(const std::u16string&)>
 +                           on_query,
 +                       base::RepeatingCallback<void(size_t)> on_activate,
-+                       base::RepeatingClosure on_tab,
 +                       base::RepeatingClosure on_escape);
 +
 +  void WindowClosing() override;
@@ -1782,12 +1746,10 @@
 +  base::OnceClosure on_closed_;
 +  base::RepeatingCallback<void(const std::u16string&)> on_query_;
 +  base::RepeatingCallback<void(size_t)> on_activate_;
-+  base::RepeatingClosure on_tab_;
 +  base::RepeatingClosure on_escape_;
 +  raw_ptr<views::Textfield> input_ = nullptr;
 +  raw_ptr<views::View> results_ = nullptr;
 +  raw_ptr<views::Label> scope_bar_ = nullptr;
-+  std::vector<HeliumCommandBarItem> items_;
 +  std::optional<size_t> scope_hint_;
 +  size_t selected_ = 0;
 +};
@@ -1796,7 +1758,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,456 @@
+@@ -0,0 +1,435 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1996,11 +1958,10 @@
 +    base::OnceClosure on_closed,
 +    base::RepeatingCallback<void(const std::u16string&)> on_query,
 +    base::RepeatingCallback<void(size_t)> on_activate,
-+    base::RepeatingClosure on_tab,
 +    base::RepeatingClosure on_escape) {
 +  auto delegate = std::unique_ptr<HeliumCommandBarView>(new HeliumCommandBarView(
 +      parent, initial_query, std::move(on_closed), std::move(on_query),
-+      std::move(on_activate), std::move(on_tab), std::move(on_escape)));
++      std::move(on_activate), std::move(on_escape)));
 +  HeliumCommandBarView* view = delegate.get();
 +  views::Widget* widget = new views::Widget;
 +  views::Widget::InitParams params(
@@ -2032,12 +1993,10 @@
 +    base::OnceClosure on_closed,
 +    base::RepeatingCallback<void(const std::u16string&)> on_query,
 +    base::RepeatingCallback<void(size_t)> on_activate,
-+    base::RepeatingClosure on_tab,
 +    base::RepeatingClosure on_escape)
 +    : on_closed_(std::move(on_closed)),
 +      on_query_(std::move(on_query)),
 +      on_activate_(std::move(on_activate)),
-+      on_tab_(std::move(on_tab)),
 +      on_escape_(std::move(on_escape)) {
 +  SetModalType(ui::mojom::ModalType::kNone);
 +  auto contents = std::make_unique<views::View>();
@@ -2089,7 +2048,6 @@
 +void HeliumCommandBarView::SetResults(
 +    const std::vector<HeliumCommandBarItem>& items,
 +    std::optional<size_t> scope_hint) {
-+  items_ = items;
 +  scope_hint_ = scope_hint;
 +  results_->RemoveAllChildViews();
 +  selected_ = 0;
@@ -2213,15 +2171,12 @@
 +    case ui::VKEY_DOWN:
 +      MoveSelection(1);
 +      return true;
-+    case ui::VKEY_TAB: {
-+      // NOTE: on macOS this case effectively never fires — AppKit consumes
-+      // Tab for key-view traversal before views dispatch, which is also why
-+      // a Tab press selects all text instead of scoping. Scope via Space
-+      // (standard) or the hint row; this path stays for platforms where Tab
-+      // arrives normally. Proven by /tmp/cmdbar.log probe, since removed.
-+      on_tab_.Run();
++    case ui::VKEY_TAB:
++      // Swallowed: on macOS AppKit consumes Tab for key-view traversal
++      // before views dispatch, so scope-by-Tab can never fire here (proven
++      // by probe) — and falling through would replay the select-all churn.
++      // Scope via trailing Space instead.
 +      return true;
-+    }
 +    case ui::VKEY_BACK:
 +      // Backspace on empty input exits the scope; otherwise edit text.
 +      if (sender->GetText().empty() && scope_bar_->GetVisible()) {
@@ -2239,18 +2194,4 @@
 +  }
 +}
 +
-+void HeliumCommandBarView::CompleteSelection() {
-+  if (selected_ >= items_.size()) {
-+    return;
-+  }
-+  const std::u16string& url = base::UTF8ToUTF16(items_[selected_].url_spec);
-+  if (!url.empty()) {
-+    SetInputText(url);
-+    // Same notification gap as scope entry: programmatic SetText does not
-+    // call back into the controller, so drive the re-query explicitly.
-+    if (!on_query_.is_null()) {
-+      on_query_.Run(std::u16string(input_->GetText()));
-+    }
-+  }
-+}
 
