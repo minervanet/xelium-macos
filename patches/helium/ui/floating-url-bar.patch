@@ -1507,7 +1507,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,435 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1743,8 +1743,11 @@
 +      on_escape_(std::move(on_escape)) {
 +  SetModalType(ui::mojom::ModalType::kNone);
 +  auto contents = std::make_unique<views::View>();
++  // Bottom inset compensates the main-axis gap below the input, so the empty
++  // state (input only) has visually balanced top/bottom margins.
 +  contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
-+      views::BoxLayout::Orientation::kVertical, gfx::Insets(8), 4));
++      views::BoxLayout::Orientation::kVertical, gfx::Insets::TLBR(8, 8, 4, 8),
++      4));
 +  // Opaque bubble so page content never bleeds through the results.
 +  contents->SetBackground(views::CreateRoundedRectBackground(
 +      ui::kColorBubbleBackground, kBubbleRadius));
