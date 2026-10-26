@@ -130,7 +130,7 @@
 
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
-@@ -16,6 +16,91 @@
+@@ -16,6 +16,92 @@
    ]
    deps = [
      "//chrome/browser/ui/browser_window",
@@ -207,6 +207,7 @@
 +    "//chrome/browser/ui/tabs:tab_model",
 +    "//chrome/browser/ui/tabs:tab_strip",
 +    "//components/bookmarks/browser",
++    "//components/favicon/content",
 +    "//components/favicon/core",
 +    "//components/favicon_base",
 +    "//components/history/core/browser",
@@ -334,7 +335,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_controller.h
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,154 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -348,6 +349,7 @@
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/weak_ptr.h"
 +#include "base/task/cancelable_task_tracker.h"
++#include "components/favicon/core/favicon_driver_observer.h"
 +#include "components/favicon_base/favicon_types.h"
 +#include "content/public/browser/web_contents_delegate.h"
 +#include "content/public/browser/web_contents_observer.h"
@@ -360,6 +362,14 @@
 +class WindowFeatures;
 +}  // namespace mojom
 +}  // namespace blink
++
++namespace favicon {
++class FaviconDriver;
++}  // namespace favicon
++
++namespace gfx {
++class Image;
++}  // namespace gfx
 +
 +namespace favicon_base {
 +struct FaviconImageResult;
@@ -403,7 +413,8 @@
 +// and splitting inserts it into a real Helium split view. This replaces the
 +// DiaPeek extension's content-script + iframe approach, which cannot run on
 +// chrome:// pages or the new tab page and fakes splits with CSS.
-+class HeliumLinkPeekController : public content::WebContentsObserver {
++class HeliumLinkPeekController : public content::WebContentsObserver,
++                                 public favicon::FaviconDriverObserver {
 + public:
 +  DECLARE_USER_DATA(HeliumLinkPeekController);
 +
@@ -446,6 +457,13 @@
 +  void DidFinishNavigation(
 +      content::NavigationHandle* navigation_handle) override;
 +
++  // favicon::FaviconDriverObserver (live icon downloads while previewing):
++  void OnFaviconUpdated(favicon::FaviconDriver* favicon_driver,
++                        NotificationIconType notification_icon_type,
++                        const GURL& icon_url,
++                        bool icon_url_changed,
++                        const gfx::Image& image) override;
++
 + private:
 +  void Show(content::WebContents* source,
 +            const GURL& url,
@@ -454,6 +472,9 @@
 +  void OnWidgetClosed();
 +  void FetchFavicons();
 +  void OnFavicon(const favicon_base::FaviconImageResult& result);
++  // Detaches both the WebContents and favicon-driver observers from a
++  // preview being adopted or destroyed; |contents| may be null.
++  void StopObservingPreview(content::WebContents* contents);
 +
 +  raw_ptr<BrowserWindowInterface> browser_;
 +  // Owned by the widget (deleted on close); null when hidden.
@@ -472,7 +493,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_controller.cc
-@@ -0,0 +1,330 @@
+@@ -0,0 +1,375 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -484,6 +505,7 @@
 +#include "base/functional/bind.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "chrome/browser/favicon/favicon_service_factory.h"
++#include "chrome/browser/favicon/favicon_utils.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/helium/helium_link_peek_view.h"
@@ -491,6 +513,7 @@
 +#include "chrome/browser/ui/tabs/tab_enums.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/common/pref_names.h"
++#include "components/favicon/content/content_favicon_driver.h"
 +#include "components/favicon/core/favicon_service.h"
 +#include "components/keyed_service/core/service_access_type.h"
 +#include "components/prefs/pref_service.h"
@@ -628,6 +651,16 @@
 +  content::WebContents::CreateParams params(browser_->GetProfile());
 +  preview_contents_ = content::WebContents::Create(params);
 +  preview_contents_->SetDelegate(&preview_blocker_);
++  // A bare WebContents has no favicon driver, so pages never download icons
++  // while previewing (and the adopted tab inherits the gap until a reload).
++  // Safe to call: early-returns if a driver already exists, so the later
++  // AttachTabHelpers on adopt is still a no-op for this.
++  favicon::CreateContentFaviconDriverForWebContents(preview_contents_.get());
++  if (favicon::ContentFaviconDriver* driver =
++          favicon::ContentFaviconDriver::FromWebContents(
++              preview_contents_.get())) {
++    driver->AddObserver(this);
++  }
 +
 +  gfx::NativeView parent;
 +  bool has_parent = false;
@@ -700,7 +733,7 @@
 +      foreground ? AddTabTypes::ADD_ACTIVE : AddTabTypes::ADD_NONE;
 +  auto group = tab_strip->GetTabGroupForTab(tab_strip->active_index());
 +  auto contents = std::move(preview_contents_);
-+  Observe(nullptr);
++  StopObservingPreview(contents.get());
 +  view_->DetachPreview();
 +  tab_strip->InsertWebContentsAt(index, std::move(contents), add_types, group);
 +  Close();
@@ -717,7 +750,7 @@
 +  const int active_index = tab_strip->active_index();
 +  auto group = tab_strip->GetTabGroupForTab(active_index);
 +  auto contents = std::move(preview_contents_);
-+  Observe(nullptr);
++  StopObservingPreview(contents.get());
 +  view_->DetachPreview();
 +  const int new_index = tab_strip->InsertWebContentsAt(
 +      active_index + 1, std::move(contents), AddTabTypes::ADD_ACTIVE, group);
@@ -746,8 +779,21 @@
 +void HeliumLinkPeekController::OnWidgetClosed() {
 +  widget_ = nullptr;
 +  view_ = nullptr;
-+  Observe(nullptr);
++  StopObservingPreview(preview_contents_.get());
 +  preview_contents_.reset();
++}
++
++// Detaches both observers from a preview that is being adopted or destroyed.
++// |contents| may be null (already moved out).
++void HeliumLinkPeekController::StopObservingPreview(
++    content::WebContents* contents) {
++  Observe(nullptr);
++  if (contents) {
++    if (favicon::ContentFaviconDriver* driver =
++            favicon::ContentFaviconDriver::FromWebContents(contents)) {
++      driver->RemoveObserver(this);
++    }
++  }
 +}
 +
 +void HeliumLinkPeekController::UpdateTitleAndIcon() {
@@ -778,6 +824,26 @@
 +  if (!result.image.IsEmpty() && view_) {
 +    view_->SetIcon(result.image);
 +  }
++}
++
++// Live icon downloads landing while the preview is open. The service query
++// in UpdateTitleAndIcon only sees already-cached icons (past visits), so
++// without this the bubble keeps the default globe for every fresh link.
++void HeliumLinkPeekController::OnFaviconUpdated(
++    favicon::FaviconDriver* favicon_driver,
++    NotificationIconType notification_icon_type,
++    const GURL& icon_url,
++    bool icon_url_changed,
++    const gfx::Image& image) {
++  if (image.IsEmpty() || !view_) {
++    return;
++  }
++  // Small bubble: prefer real favicons over large touch icons.
++  if (notification_icon_type != NON_TOUCH_16_DIP &&
++      notification_icon_type != NON_TOUCH_LARGEST) {
++    return;
++  }
++  view_->SetIcon(image);
 +}
 +
 +void HeliumLinkPeekController::DidFinishNavigation(
