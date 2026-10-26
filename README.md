@@ -30,7 +30,7 @@ Mostly nothing of my own. Xelium is Helium plus a handful of open, unmerged pull
 
 I also added a few small patches of my own to make these pieces work together (see below).
 
-No extensions are bundled with Xelium besides Helium's built-in uBlock Origin. The keyboard-first command bar (Command+T / Command+L) and the link peek preview are native Xelium features, not extensions, so they also work on settings pages and the new tab page.
+No extensions are bundled with Xelium besides Helium's built-in uBlock Origin. The keyboard-first command bar (Command+T / Command+L) and the link peek preview are native Xelium features, not extensions, so they also work on settings pages and the new tab page. They replace [lumno](https://github.com/kubai087/lumno-extension) and [DiaPeek](https://github.com/VanDerLars/DiaPeek), which used to ship with the browser — kept as reference under Credits, since the native versions were built to match their behavior.
 
 ## Credits
 
@@ -44,7 +44,11 @@ Everything here belongs to the original authors.
   - [#2367](https://github.com/imputnet/helium/pull/2367): show address bar in sidebar (by [heloess](https://github.com/heloess))
 - Bundled extensions, preinstalled with the browser:
   - [uBlock Origin](https://github.com/gorhill/uBlock) (by Raymond Hill and contributors, GPL-3.0), which ships with Helium
-- My own patches: comfortable sizing for vertical tabs, configurable rounded-frame thickness, narrower sidebar with the address bar, compact toolbar for vertical tabs, native frame materials by default, capped pinned-tab rows, sidebar pin button, toolbar/top-bar split, app menu reveal, default appearance settings, and the native command bar. I also wrote the Xelium rebrand, the bundled-extension packaging, and the crash-reporting and report-on-GitHub changes.
+- Reference: previously bundled, since replaced by native Xelium features —
+  kept here because the native versions were built to match them:
+  - [lumno](https://github.com/kubai087/lumno-extension) (by [kubai087](https://github.com/kubai087), GPL-3.0), keyboard-first command bar → now native (Settings > Appearance > Command bar)
+  - [DiaPeek](https://github.com/VanDerLars/DiaPeek) (by [Lars Lehmann / VanDerLars](https://github.com/VanDerLars), MIT) → now native (Settings > Appearance > Link peek)
+- My own patches: comfortable sizing for vertical tabs, configurable rounded-frame thickness, narrower sidebar with the address bar, compact toolbar for vertical tabs, native frame materials by default, capped pinned-tab rows, sidebar pin button, toolbar/top-bar split, app menu reveal, default appearance settings, and the native command bar and link peek. I also wrote the Xelium rebrand, the (since removed) bundled-extension packaging, and the crash-reporting and report-on-GitHub changes.
 
 ## Updates
 
