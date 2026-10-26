@@ -536,7 +536,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,593 @@
+@@ -0,0 +1,610 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -857,6 +857,21 @@
 +    EnterScope(items_[*scope_hint_index_].site_keyword);
 +    return;
 +  }
++  // No hint row (clipped, or list not yet built): Tab still scopes when the
++  // query itself is a scope keyword, so scoping never depends on row luck.
++  if (auto split = helium_command_bar_model::SplitKeyword(last_query_, false);
++      split && !split->keyword.empty()) {
++    TemplateURLService* template_urls =
++        TemplateURLServiceFactory::GetForProfile(browser_->GetProfile());
++    if (helium_command_bar_model::EngineOwnsKeyword(template_urls,
++                                                    split->keyword) ||
++        (split->keyword == "tab" &&
++         !helium_command_bar_model::EngineOwnsKeyword(template_urls,
++                                                      "tab"))) {
++      EnterScope(split->keyword);
++      return;
++    }
++  }
 +  view_->CompleteSelection();
 +}
 +
@@ -865,12 +880,14 @@
 +    return;
 +  }
 +  scope_keyword_ = keyword;
-+  // Clear the keyword so the scoped query is typed fresh. SetInputText
-+  // fires ContentsChanged, which re-queries from "" and shows the badge
-+  // via PushItems. The bar stays open.
++  // Clear the keyword so the scoped query is typed fresh. NOTE: SetText
++  // does NOT notify the TextfieldController (only user edits do), so drive
++  // the re-query explicitly — otherwise neither results nor the scope
++  // badge update until the next keystroke.
 +  if (view_) {
 +    view_->SetInputText(std::u16string());
 +  }
++  OnQueryChanged(std::u16string());
 +}
 +
 +void HeliumCommandBarController::OnEscapePressed() {
@@ -1760,7 +1777,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,452 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -2206,6 +2223,11 @@
 +  const std::u16string& url = base::UTF8ToUTF16(items_[selected_].url_spec);
 +  if (!url.empty()) {
 +    SetInputText(url);
++    // Same notification gap as scope entry: programmatic SetText does not
++    // call back into the controller, so drive the re-query explicitly.
++    if (!on_query_.is_null()) {
++      on_query_.Run(std::u16string(input_->GetText()));
++    }
 +  }
 +}
 
