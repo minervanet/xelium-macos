@@ -11,7 +11,7 @@
 
 --- a/chrome/app/settings_strings.grdp
 +++ b/chrome/app/settings_strings.grdp
-@@ -359,6 +359,12 @@
+@@ -359,7 +359,19 @@
      </message>
      <message name="IDS_SETTINGS_SHOW_PROGRESS_BAR" desc="Label for the toggle that shows loading progress in the address bar.">
        Show loading progress in the address bar
@@ -21,13 +21,20 @@
 +    </message>
 +    <message name="IDS_SETTINGS_COMMAND_BAR_DESCRIPTION" desc="Description for the command bar toggle in appearance settings.">
 +      Open a floating command bar with Cmd+T / Cmd+L instead, anywhere including settings pages
++    </message>
++    <message name="IDS_SETTINGS_LINK_PEEK" desc="Label for the toggle that enables the native link peek preview.">
++      Link peek
      </message>
++    <message name="IDS_SETTINGS_LINK_PEEK_DESCRIPTION" desc="Description for the link peek toggle in appearance settings.">
++      Preview Shift+click and force-new-tab links in a floating window instead of opening them right away
++    </message>
      <message name="IDS_SETTINGS_BROWSER_ZEN_MODE" desc="Label for the toggle that enables zen mode, hiding browser chrome until hover.">
        Frameless mode
+     </message>
 
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -678,6 +678,10 @@
+@@ -678,6 +678,16 @@
  // location bar.
  inline constexpr char kHeliumShowProgressBar[] =
      "helium.browser.show_progress_bar";
@@ -35,16 +42,68 @@
 +// A boolean pref set to true if the native command bar is enabled. When on,
 +// Cmd+T / Cmd+L open the bar instead of their built-in actions.
 +inline constexpr char kHeliumCommandBarEnabled[] = "helium.command_bar.enabled";
++
++// A boolean pref set to true if the native link peek is enabled. When on,
++// Shift+click and links that force a new foreground tab open a floating
++// preview instead of navigating immediately. Middle-click keeps its native
++// background-tab behavior.
++inline constexpr char kHeliumLinkPeekEnabled[] = "helium.link_peek.enabled";
  
  // A boolean pref set to true if a Home button to open the Home pages should be
  // visible on the toolbar.
 
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
-@@ -19,3 +19,45 @@
+@@ -16,6 +16,91 @@
+   ]
+   deps = [
+     "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui:layout_constants",
      "//chrome/common:constants",
    ]
  }
++
++source_set("helium_link_peek") {
++  sources = [
++    "helium_link_peek_controller.cc",
++    "helium_link_peek_controller.h",
++    "helium_link_peek_modifiers.h",
++    "helium_link_peek_modifiers_mac.mm",
++    "helium_link_peek_view.cc",
++    "helium_link_peek_view.h",
++  ]
++
++  public_deps = [
++    "//base",
++    "//chrome/browser/ui/browser_window",
++    "//ui/base/unowned_user_data",
++  ]
++
++  deps = [
++    "//chrome/browser/bookmarks",
++    "//chrome/browser/favicon",
++    "//chrome/browser/history",
++    "//chrome/browser/profiles",
++    "//chrome/browser/ui/navigator",
++    "//chrome/browser/ui/tabs:tab_model",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/bookmarks/browser",
++    "//components/favicon/core",
++    "//components/favicon_base",
++    "//components/history/core/browser",
++    "//components/keyed_service/core",
++    "//components/prefs",
++    "//components/search_engines",
++    "//components/tabs:public",
++    "//components/vector_icons",
++    "//content/public/browser",
++    "//ui/base",
++    "//ui/color",
++    "//ui/events",
++    "//ui/gfx",
++    "//ui/views",
++  ]
++}
 +
 +source_set("helium_command_bar") {
 +  sources = [
@@ -90,36 +149,41 @@
 
 --- a/chrome/browser/ui/browser_window/public/browser_window_features.h
 +++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
-@@ -80,6 +80,7 @@
+@@ -80,6 +80,8 @@
  class FindBarOwner;
  class FullscreenControlHost;
  class HeliumLayoutStateController;
 +class HeliumCommandBarController;
++class HeliumLinkPeekController;
  class HistoryClustersSidePanelCoordinator;
  class HistorySidePanelCoordinator;
  class ImmersiveModeController;
-@@ -469,6 +470,9 @@
+@@ -469,6 +471,12 @@
        send_tab_to_self_iph_controller_;
    std::unique_ptr<VerticalTabIphController> vertical_tab_iph_controller_;
    std::unique_ptr<HeliumLayoutStateController> helium_layout_state_controller_;
 +  // Per-window native command bar. Owned here so the command handler can
 +  // reach it via HeliumCommandBarController::From(browser).
 +  std::unique_ptr<HeliumCommandBarController> helium_command_bar_controller_;
++  // Per-window native link peek. Owned here so the contents delegate can
++  // reach it via HeliumLinkPeekController::From(browser).
++  std::unique_ptr<HeliumLinkPeekController> helium_link_peek_controller_;
  
    std::unique_ptr<tabs::VerticalTabStripStateController>
        vertical_tab_strip_state_controller_;
 
 --- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
-@@ -81,6 +81,7 @@
+@@ -81,6 +81,8 @@
  #include "chrome/browser/ui/focus/browser_focus_controller_webui.h"
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
 +#include "chrome/browser/ui/helium/helium_command_bar_controller.h"
++#include "chrome/browser/ui/helium/helium_link_peek_controller.h"
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
  #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
-@@ -651,6 +652,10 @@
+@@ -651,7 +653,15 @@
      helium_layout_state_controller_ =
          GetUserDataFactory().CreateInstance<HeliumLayoutStateController>(
              *browser, browser, profile->GetPrefs());
@@ -128,9 +192,14 @@
 +        GetUserDataFactory().CreateInstance<HeliumCommandBarController>(
 +            *browser, browser);
  
++    helium_link_peek_controller_ =
++        GetUserDataFactory().CreateInstance<HeliumLinkPeekController>(
++            *browser, browser);
++
      vertical_tab_strip_state_controller_ =
          GetUserDataFactory()
-@@ -841,6 +846,9 @@
+             .CreateInstance<tabs::VerticalTabStripStateControllerImpl>(
+@@ -841,6 +851,9 @@
          std::make_unique<ExtensionKeybindingRegistryViews>(
              browser, extensions::ExtensionKeybindingRegistry::ALL_EXTENSIONS,
              focus_manager);
@@ -143,11 +212,12 @@
 
 --- a/chrome/browser/ui/browser_window/internal/BUILD.gn
 +++ b/chrome/browser/ui/browser_window/internal/BUILD.gn
-@@ -115,6 +115,7 @@
+@@ -115,6 +115,8 @@
        "//chrome/browser/ui/focus",
        "//chrome/browser/ui/fullscreen",
        "//chrome/browser/ui/helium:helium_layout_state_controller",
 +      "//chrome/browser/ui/helium:helium_command_bar",
++      "//chrome/browser/ui/helium:helium_link_peek",
        "//chrome/browser/ui/lens",
        "//chrome/browser/ui/performance_controls",
        "//chrome/browser/ui/send_tab_to_self",
@@ -192,7 +262,7 @@
 
 --- a/chrome/browser/ui/browser_ui_prefs.cc
 +++ b/chrome/browser/ui/browser_ui_prefs.cc
-@@ -151,6 +151,10 @@
+@@ -151,6 +151,14 @@
    registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, false);
  
    registry->RegisterBooleanPref(prefs::kHeliumShowProgressBar, true);
@@ -200,6 +270,10 @@
 +  // Native command bar (Settings > Appearance > Command bar), off by default.
 +  // With it on, Cmd+T / Cmd+L open the bar instead of new-tab / focus-bar.
 +  registry->RegisterBooleanPref(prefs::kHeliumCommandBarEnabled, false);
++
++  // Native link peek (Settings > Appearance > Link peek), on by default.
++  // With it on, new-tab clicks open a floating preview instead of navigating.
++  registry->RegisterBooleanPref(prefs::kHeliumLinkPeekEnabled, true);
  
    // Xelium default: at most four pinned tabs per row.
    registry->RegisterIntegerPref(prefs::kHeliumVerticalPinnedTabsPerRow, 4);
@@ -231,19 +305,21 @@
 
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -643,6 +643,8 @@
+@@ -643,6 +643,10 @@
        {"verticalCollapseShortcut", IDS_SETTINGS_VERTICAL_COLLAPSE_SHORTCUT},
        {"minimalLocationBar", IDS_SETTINGS_MINIMAL_LOCATION_BAR},
        {"showProgressBar", IDS_SETTINGS_SHOW_PROGRESS_BAR},
 +      {"commandBarEnabled", IDS_SETTINGS_COMMAND_BAR},
 +      {"commandBarEnabledDescription", IDS_SETTINGS_COMMAND_BAR_DESCRIPTION},
++      {"linkPeekEnabled", IDS_SETTINGS_LINK_PEEK},
++      {"linkPeekEnabledDescription", IDS_SETTINGS_LINK_PEEK_DESCRIPTION},
        {"shiftRightClickContextMenu",
         IDS_SETTINGS_SHIFT_RIGHT_CLICK_CONTEXT_MENU},
        {"showZoomIndicator", IDS_SETTINGS_SHOW_ZOOM_INDICATOR},
 
 --- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
 +++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
-@@ -68,6 +68,11 @@
+@@ -68,6 +68,16 @@
        label="$i18n{showProgressBar}">
    </settings-toggle-button>
    <settings-toggle-button class="hr"
@@ -252,18 +328,25 @@
 +      sub-label="$i18n{commandBarEnabledDescription}">
 +  </settings-toggle-button>
 +  <settings-toggle-button class="hr"
++      pref-key="helium.link_peek.enabled"
++      label="$i18n{linkPeekEnabled}"
++      sub-label="$i18n{linkPeekEnabledDescription}">
++  </settings-toggle-button>
++  <settings-toggle-button class="hr"
        pref-key="helium.browser.zen_mode"
        label="$i18n{browserZenMode}"
        sub-label="$i18n{browserZenModeDescription}">
 
 --- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -327,6 +327,8 @@
+@@ -327,6 +327,10 @@
    (*s_allowlist)[::prefs::kVisualTabSwitcher] =
        settings_api::PrefType::kBoolean;
    (*s_allowlist)[::prefs::kVisualTabSwitcherList] =
 +      settings_api::PrefType::kBoolean;
 +  (*s_allowlist)[::prefs::kHeliumCommandBarEnabled] =
++      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumLinkPeekEnabled] =
        settings_api::PrefType::kBoolean;
    (*s_allowlist)[::prefs::kShiftRightClickContextMenu] =
        settings_api::PrefType::kBoolean;
@@ -281,7 +364,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.h
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,147 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -357,6 +440,9 @@
 +  void Show(gfx::NativeView parent,
 +            const std::u16string& initial_query = {});
 +  void Hide();
++  // Deferred Hide for use inside input/mouse event dispatch, where closing
++  // the widget synchronously would destroy views still on the stack.
++  void HideSoon();
 +  bool IsShowing() const;
 +
 +  // Rebuilds results for |query|: tabs, bookmarks and commands synchronously,
@@ -429,7 +515,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,448 @@
+@@ -0,0 +1,508 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -438,6 +524,7 @@
 +
 +#include "base/functional/bind.h"
 +#include "base/strings/utf_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/bookmarks/bookmark_model_factory.h"
 +#include "chrome/browser/favicon/favicon_service_factory.h"
@@ -464,6 +551,36 @@
 +#include "ui/views/widget/widget.h"
 +
 +DEFINE_USER_DATA(HeliumCommandBarController);
++
++namespace {
++
++// Visible identity of a result row. Scores are excluded on purpose: the same
++// query always scores the same, and rebuilding identical rows every
++// keystroke is what made the bubble flash.
++bool SameItems(const std::vector<HeliumCommandBarItem>& a,
++               const std::vector<HeliumCommandBarItem>& b) {
++  if (a.size() != b.size()) {
++    return false;
++  }
++  for (size_t i = 0; i < a.size(); ++i) {
++    if (a[i].type != b[i].type || a[i].title != b[i].title ||
++        a[i].url_spec != b[i].url_spec ||
++        a[i].site_keyword != b[i].site_keyword ||
++        a[i].command != b[i].command || a[i].tab_index != b[i].tab_index) {
++      return false;
++    }
++  }
++  return true;
++}
++
++// True for the new tab page in both its incarnations. Entering a URL there
++// navigates in place instead of opening yet another tab.
++bool IsNewTabUrl(const GURL& url) {
++  return url.SchemeIs("chrome") &&
++         (url.host() == "newtab" || url.host() == "new-tab-page");
++}
++
++}  // namespace
 +
 +// static
 +HeliumCommandBarController* HeliumCommandBarController::From(
@@ -619,8 +736,14 @@
 +
 +void HeliumCommandBarController::PushItems(
 +    std::vector<HeliumCommandBarItem> items) {
++  const bool same = SameItems(items_, items);
 +  items_ = std::move(items);
-+  ++items_seq_;
++  if (!same) {
++    // Bumped only on real change: in-flight favicon callbacks carry the
++    // sequence they started with, and identical rebuilds must not orphan
++    // icons that are still on their way.
++    ++items_seq_;
++  }
 +  scope_hint_index_.reset();
 +  for (size_t i = 0; i < items_.size(); ++i) {
 +    if (items_[i].type == HeliumCommandBarItem::Type::kSiteSearch) {
@@ -629,7 +752,9 @@
 +    }
 +  }
 +  if (view_) {
-+    view_->SetResults(items_, scope_hint_index_);
++    if (!same) {
++      view_->SetResults(items_, scope_hint_index_);
++    }
 +    if (scope_keyword_.empty()) {
 +      view_->ClearScope();
 +    } else {
@@ -638,7 +763,9 @@
 +          scope_keyword_));
 +    }
 +  }
-+  FetchFavicons();
++  if (!same) {
++    FetchFavicons();
++  }
 +}
 +
 +void HeliumCommandBarController::FetchFavicons() {
@@ -685,7 +812,18 @@
 +    ExitScope();
 +    return;
 +  }
-+  Hide();
++  HideSoon();
++}
++
++// Closing the widget synchronously from inside a textfield key handler or
++// a row mouse-press destroys views that are still on the dispatch stack.
++// Activate/Escape arrive from exactly those paths, so they defer the close
++// to the next task instead. Toggle() keeps the synchronous Hide: accelerators
++// dispatch through the FocusManager, which only holds this controller.
++void HeliumCommandBarController::HideSoon() {
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&HeliumCommandBarController::Hide,
++                                weak_factory_.GetWeakPtr()));
 +}
 +
 +void HeliumCommandBarController::ExitScope() {
@@ -809,7 +947,7 @@
 +        item.tab_index < tab_strip->count()) {
 +      tab_strip->ActivateTabAt(item.tab_index);
 +    }
-+    Hide();
++    HideSoon();
 +    return;
 +  }
 +  GURL url;
@@ -859,7 +997,7 @@
 +            ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
 +            writer.WriteText(base::UTF8ToUTF16(contents->GetVisibleURL().spec()));
 +          }
-+          Hide();
++          HideSoon();
 +          return;
 +        }
 +      }
@@ -874,9 +1012,17 @@
 +  if (url.is_valid()) {
 +    NavigateParams params(browser_, url, ui::PAGE_TRANSITION_TYPED);
 +    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    // On the new tab page there is nothing to keep: navigate in place
++    // instead of stacking another tab, no matter the Cmd+T/Cmd+L entry.
++    TabStripModel* tab_strip = browser_->GetTabStripModel();
++    content::WebContents* contents =
++        tab_strip ? tab_strip->GetActiveWebContents() : nullptr;
++    if (contents && IsNewTabUrl(contents->GetVisibleURL())) {
++      params.disposition = WindowOpenDisposition::CURRENT_TAB;
++    }
 +    Navigate(&params);
 +  }
-+  Hide();
++  HideSoon();
 +}
 
 --- /dev/null
@@ -1398,7 +1544,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.h
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,106 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1489,6 +1635,7 @@
 +  void MoveSelection(int delta);
 +  void SetSelected(size_t index);
 +  void UpdateRowHighlight();
++  void ResizeToContents();
 +
 +  base::OnceClosure on_closed_;
 +  base::RepeatingCallback<void(const std::u16string&)> on_query_;
@@ -1507,7 +1654,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,435 @@
+@@ -0,0 +1,441 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1613,18 +1760,22 @@
 +    title->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 +    title->SetElideBehavior(gfx::ELIDE_TAIL);
 +    title_ = title;
-+    const std::u16string subtitle = item.url_spec.empty()
-+                                        ? u""
-+                                        : base::UTF8ToUTF16(item.url_spec);
-+    auto* url = text->AddChildView(
-+        std::make_unique<views::Label>(subtitle, views::style::CONTEXT_LABEL,
-+                                       views::style::STYLE_SECONDARY));
-+    url->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-+    url->SetElideBehavior(gfx::ELIDE_TAIL);
-+    url->SetFontList(
-+        url->font_list().DeriveWithSizeDelta(-2));
++    // Single-line rows (commands, tabs without... ) must not reserve a
++    // second line: an empty Label still measures a full line height, which
++    // pushed the title above the icon instead of centering it.
++    const bool has_subtitle = !item.url_spec.empty();
++    views::Label* url = nullptr;
++    if (has_subtitle) {
++      const std::u16string subtitle = base::UTF8ToUTF16(item.url_spec);
++      url = text->AddChildView(std::make_unique<views::Label>(
++          subtitle, views::style::CONTEXT_LABEL,
++          views::style::STYLE_SECONDARY));
++      url->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++      url->SetElideBehavior(gfx::ELIDE_TAIL);
++      url->SetFontList(url->font_list().DeriveWithSizeDelta(-2));
++    }
 +    // Fixed width so every row lines up and the tag column never moves.
-+    // Height follows the two labels; the row centers it vertically.
++    // Height follows the labels; the row centers it vertically.
 +    text->SetPreferredSize(
 +        gfx::Size(kTextWidth, text->GetPreferredSize().height()));
 +    auto* tag = AddChildView(std::make_unique<views::Label>(
@@ -1634,9 +1785,10 @@
 +    tag->SetElideBehavior(gfx::ELIDE_TAIL);
 +    tag->SetFontList(tag->font_list().DeriveWithSizeDelta(-1));
 +    // Fixed width, vertically centered by the row's cross-axis alignment, so
-+    // the tag never drifts into the title or URL.
++    // the tag never drifts into the title or URL. Height tracks the title
++    // so single-line rows keep the tag aligned with it.
 +    tag->SetPreferredSize(
-+        gfx::Size(kTagWidth, url->GetPreferredSize().height()));
++        gfx::Size(kTagWidth, title->GetPreferredSize().height()));
 +    SetPreferredSize(
 +        gfx::Size(kBarWidth - 2 * kHorizontalPadding, kRowHeight));
 +    on_click_ = std::move(on_click);
@@ -1646,8 +1798,6 @@
 +
 +  void SetSelected(bool selected) {
 +    marker_->SetText(selected ? u"\u2192" : u"");
-+    title_->SetFontList(title_->font_list().DeriveWithWeight(
-+        selected ? gfx::Font::Weight::BOLD : gfx::Font::Weight::NORMAL));
 +    if (selected) {
 +      // Translucent so the frosted backdrop tints through.
 +      SkColor base = GetColorProvider()->GetColor(
@@ -1811,9 +1961,18 @@
 +    results_->AddChildView(std::move(row));
 +  }
 +  UpdateRowHighlight();
-+  if (GetWidget()) {
-+    GetWidget()->SetSize(
-+        gfx::Size(kBarWidth, GetContentsView()->GetPreferredSize().height()));
++  ResizeToContents();
++}
++
++void HeliumCommandBarView::ResizeToContents() {
++  if (!GetWidget()) {
++    return;
++  }
++  // Resizing the popup every keystroke flashes the whole bubble. Only
++  // resize when the height actually changed.
++  const int height = GetContentsView()->GetPreferredSize().height();
++  if (GetWidget()->GetWindowBoundsInScreen().height() != height) {
++    GetWidget()->SetSize(gfx::Size(kBarWidth, height));
 +  }
 +}
 +
@@ -1824,10 +1983,7 @@
 +void HeliumCommandBarView::SetScope(const std::u16string& name) {
 +  scope_bar_->SetText(name + u"   esc to exit");
 +  scope_bar_->SetVisible(true);
-+  if (GetWidget()) {
-+    GetWidget()->SetSize(
-+        gfx::Size(kBarWidth, GetContentsView()->GetPreferredSize().height()));
-+  }
++  ResizeToContents();
 +}
 +
 +void HeliumCommandBarView::ClearScope() {
@@ -1835,10 +1991,7 @@
 +    return;
 +  }
 +  scope_bar_->SetVisible(false);
-+  if (GetWidget()) {
-+    GetWidget()->SetSize(
-+        gfx::Size(kBarWidth, GetContentsView()->GetPreferredSize().height()));
-+  }
++  ResizeToContents();
 +}
 +
 +void HeliumCommandBarView::SetItemImage(size_t index,
