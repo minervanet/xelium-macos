@@ -1162,7 +1162,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_controller.h
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,209 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1361,6 +1361,12 @@
 +  bool load_in_flight_ = false;
 +  int switch_sequence_ = 0;
 +
++  // Registers this controller on the owning window so UI code can reach it
++  // via HeliumWorkspaceController::From(browser). Must be declared after
++  // the members it observes and destroyed first.
++  ui::ScopedUnownedUserData<HeliumWorkspaceController>
++      scoped_unowned_user_data_;
++
 +  base::RepeatingCallbackList<void()> observers_;
 +  base::WeakPtrFactory<HeliumWorkspaceController> weak_factory_{this};
 +};
@@ -1369,7 +1375,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_controller.cc
-@@ -0,0 +1,883 @@
+@@ -0,0 +1,885 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1457,7 +1463,9 @@
 +HeliumWorkspaceController::HeliumWorkspaceController(
 +    BrowserWindowInterface* browser,
 +    PrefService* pref_service)
-+    : browser_(browser), pref_service_(pref_service) {
++    : browser_(browser),
++      pref_service_(pref_service),
++      scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this) {
 +  pref_registrar_.Init(pref_service_);
 +  pref_registrar_.Add(
 +      prefs::kHeliumWorkspacesEnabled,
