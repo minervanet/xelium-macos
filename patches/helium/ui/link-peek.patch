@@ -131,7 +131,7 @@
 
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
-@@ -19,3 +19,86 @@
+@@ -19,3 +19,87 @@
      "//chrome/common:constants",
    ]
  }
@@ -168,6 +168,7 @@
 +    "//components/prefs",
 +    "//components/search_engines",
 +    "//components/tabs:public",
++    "//components/vector_icons",
 +    "//content/public/browser",
 +    "//ui/base",
 +    "//ui/color",
@@ -221,7 +222,7 @@
 
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -678,7 +678,16 @@
+@@ -678,6 +678,16 @@
  // location bar.
  inline constexpr char kHeliumShowProgressBar[] =
      "helium.browser.show_progress_bar";
@@ -229,15 +230,15 @@
 +// A boolean pref set to true if the native command bar is enabled. When on,
 +// Cmd+T / Cmd+L open the bar instead of their built-in actions.
 +inline constexpr char kHeliumCommandBarEnabled[] = "helium.command_bar.enabled";
- 
-+// A boolean pref set to true if the native link peek is enabled. When on,
-+// target=_blank, middle-click and Shift+click links open a floating preview
-+// instead of navigating immediately.
-+inline constexpr char kHeliumLinkPeekEnabled[] = "helium.link_peek.enabled";
 +
++// A boolean pref set to true if the native link peek is enabled. When on,
++// Shift+click and links that force a new foreground tab open a floating
++// preview instead of navigating immediately. Middle-click keeps its native
++// background-tab behavior.
++inline constexpr char kHeliumLinkPeekEnabled[] = "helium.link_peek.enabled";
+ 
  // A boolean pref set to true if a Home button to open the Home pages should be
  // visible on the toolbar.
- inline constexpr char kShowHomeButton[] = "browser.show_home_button";
 
 --- a/chrome/browser/ui/browser_ui_prefs.cc
 +++ b/chrome/browser/ui/browser_ui_prefs.cc
@@ -288,7 +289,7 @@
 +      Link peek
      </message>
 +    <message name="IDS_SETTINGS_LINK_PEEK_DESCRIPTION" desc="Description for the link peek toggle in appearance settings.">
-+      Preview new-tab links in a floating window instead of opening them right away
++      Preview Shift+click and force-new-tab links in a floating window instead of opening them right away
 +    </message>
      <message name="IDS_SETTINGS_BROWSER_ZEN_MODE" desc="Label for the toggle that enables zen mode, hiding browser chrome until hover.">
        Frameless mode
@@ -330,7 +331,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_controller.h
-@@ -0,0 +1,127 @@
+@@ -0,0 +1,129 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -414,6 +415,8 @@
 +  // Returns true when the navigation was consumed by a peek preview.
 +  // |modifier_held| is true when Cmd/Ctrl/Alt is down: those clicks keep
 +  // their native behavior (instant tab, context menu, native split).
++  // Middle-click (background tab) also keeps its native behavior; peek
++  // triggers on Shift+click and links that force a new foreground tab.
 +  bool MaybePeek(content::WebContents* source,
 +                 const GURL& url,
 +                 WindowOpenDisposition disposition,
@@ -461,7 +464,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_controller.cc
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,293 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -571,7 +574,6 @@
 +    return false;
 +  }
 +  if (disposition != WindowOpenDisposition::NEW_FOREGROUND_TAB &&
-+      disposition != WindowOpenDisposition::NEW_BACKGROUND_TAB &&
 +      disposition != WindowOpenDisposition::NEW_WINDOW) {
 +    return false;
 +  }
@@ -613,10 +615,6 @@
 +  content::WebContents::CreateParams params(browser_->GetProfile());
 +  preview_contents_ = content::WebContents::Create(params);
 +  preview_contents_->SetDelegate(&preview_blocker_);
-+  content::NavigationController::LoadURLParams load_params(url);
-+  load_params.transition_type = ui::PAGE_TRANSITION_LINK;
-+  preview_contents_->GetController().LoadURLWithParams(load_params);
-+  Observe(preview_contents_.get());
 +
 +  gfx::NativeView parent;
 +  bool has_parent = false;
@@ -631,6 +629,7 @@
 +    has_parent = true;
 +  }
 +  if (!has_parent) {
++    preview_contents_.reset();
 +    return;
 +  }
 +  view_ = HeliumLinkPeekView::Show(
@@ -644,6 +643,14 @@
 +      base::BindRepeating(&HeliumLinkPeekController::CopyLink,
 +                          weak_factory_.GetWeakPtr()));
 +  widget_ = view_->GetWidget();
++  // Navigate only after the preview is attached to the bubble's WebView, so
++  // the renderer creates its view at the real popup size and paints the
++  // first frame there. Navigating while detached leaves a blank bubble: the
++  // page commits at 0x0 and only paints once adopted into a tab.
++  Observe(preview_contents_.get());
++  content::NavigationController::LoadURLParams load_params(url);
++  load_params.transition_type = ui::PAGE_TRANSITION_LINK;
++  preview_contents_->GetController().LoadURLWithParams(load_params);
 +  UpdateTitleAndIcon();
 +}
 +
@@ -798,7 +805,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_view.h
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,95 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -818,6 +825,7 @@
 +namespace gfx {
 +class Image;
 +class Rect;
++class Size;
 +}  // namespace gfx
 +
 +namespace content {
@@ -874,6 +882,7 @@
 +  HeliumLinkPeekView(gfx::NativeView parent,
 +                     content::WebContents* preview,
 +                     Profile* profile,
++                     const gfx::Size& popup_size,
 +                     base::OnceClosure on_closed,
 +                     base::RepeatingCallback<void(bool)> on_open_tab,
 +                     base::RepeatingClosure on_open_split,
@@ -895,7 +904,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_view.cc
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,237 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -904,9 +913,12 @@
 +
 +#include <utility>
 +
++#include <algorithm>
++
 +#include "base/functional/bind.h"
 +#include "chrome/app/vector_icons/vector_icons.h"
 +#include "chrome/browser/profiles/profile.h"
++#include "components/vector_icons/vector_icons.h"
 +#include "content/public/browser/web_contents.h"
 +#include "ui/base/accelerators/accelerator.h"
 +#include "ui/base/accelerators/accelerator_manager.h"
@@ -917,6 +929,7 @@
 +#include "ui/gfx/image/image.h"
 +#include "ui/views/background.h"
 +#include "ui/views/border.h"
++#include "ui/views/controls/button/image_button.h"
 +#include "ui/views/controls/button/label_button.h"
 +#include "ui/views/controls/image_view.h"
 +#include "ui/views/controls/label.h"
@@ -929,18 +942,35 @@
 +
 +namespace {
 +
-+// Matches the command bar bubble.
-+constexpr int kPopupWidth = 760;
-+constexpr int kPopupHeight = 560;
++// The bubble covers most of the content area: 62% of the parent width and
++// 72% of its height, clamped so it stays usable on small windows and never
++// overwhelms large ones.
 +constexpr int kBubbleRadius = 16;
 +constexpr int kHeaderHeight = 40;
 +constexpr int kIconSize = 16;
++constexpr int kActionButtonSize = 28;
 +
-+views::LabelButton* ActionButton(const std::u16string& text,
++gfx::Size ComputePopupSize(const gfx::Rect& parent_bounds) {
++  const int width = std::clamp(
++      static_cast<int>(parent_bounds.width() * 0.62), 880, 1080);
++  const int height = std::clamp(
++      static_cast<int>(parent_bounds.height() * 0.72), 620, 800);
++  return gfx::Size(width, height);
++}
++
++views::ImageButton* ActionButton(const gfx::VectorIcon& icon,
++                                 const std::u16string& tooltip,
 +                                 views::View* parent,
 +                                 base::RepeatingClosure pressed) {
-+  auto* button = parent->AddChildView(std::make_unique<views::LabelButton>(
-+      std::move(pressed), text));
++  auto* button = parent->AddChildView(
++      std::make_unique<views::ImageButton>(std::move(pressed)));
++  button->SetImageModel(
++      views::Button::STATE_NORMAL,
++      ui::ImageModel::FromVectorIcon(icon, ui::kColorMenuIcon, kIconSize));
++  button->SetTooltipText(tooltip);
++  button->SetPreferredSize(gfx::Size(kActionButtonSize, kActionButtonSize));
++  button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
++  button->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
 +  return button;
 +}
 +
@@ -955,9 +985,13 @@
 +    base::RepeatingCallback<void(bool)> on_open_tab,
 +    base::RepeatingClosure on_open_split,
 +    base::RepeatingClosure on_copy_link) {
++  const gfx::Rect parent_bounds =
++      views::Widget::GetWidgetForNativeView(parent)->GetWindowBoundsInScreen();
++  const gfx::Size popup_size = ComputePopupSize(parent_bounds);
 +  auto delegate = std::unique_ptr<HeliumLinkPeekView>(new HeliumLinkPeekView(
-+      parent, preview, profile, std::move(on_closed), std::move(on_open_tab),
-+      std::move(on_open_split), std::move(on_copy_link)));
++      parent, preview, profile, popup_size, std::move(on_closed),
++      std::move(on_open_tab), std::move(on_open_split),
++      std::move(on_copy_link)));
 +  HeliumLinkPeekView* view = delegate.get();
 +  views::Widget* widget = new views::Widget;
 +  views::Widget::InitParams params(
@@ -970,12 +1004,10 @@
 +  params.activatable = views::Widget::InitParams::Activatable::kYes;
 +  widget->Init(std::move(params));
 +
-+  const gfx::Rect parent_bounds =
-+      views::Widget::GetWidgetForNativeView(parent)->GetWindowBoundsInScreen();
 +  widget->SetBounds(gfx::Rect(
-+      parent_bounds.x() + (parent_bounds.width() - kPopupWidth) / 2,
-+      parent_bounds.y() + parent_bounds.height() / 6, kPopupWidth,
-+      kPopupHeight));
++      parent_bounds.x() + (parent_bounds.width() - popup_size.width()) / 2,
++      parent_bounds.y() + parent_bounds.height() / 8, popup_size.width(),
++      popup_size.height()));
 +  widget->Show();
 +  widget->AddObserver(view);
 +  widget->GetFocusManager()->RegisterAccelerator(
@@ -989,6 +1021,7 @@
 +    gfx::NativeView parent,
 +    content::WebContents* preview,
 +    Profile* profile,
++    const gfx::Size& popup_size,
 +    base::OnceClosure on_closed,
 +    base::RepeatingCallback<void(bool)> on_open_tab,
 +    base::RepeatingClosure on_open_split,
@@ -1009,7 +1042,7 @@
 +  auto* header = contents->AddChildView(std::make_unique<views::View>());
 +  header->SetLayoutManager(std::make_unique<views::BoxLayout>(
 +      views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(0, 4), 8));
-+  header->SetPreferredSize(gfx::Size(kPopupWidth, kHeaderHeight));
++  header->SetPreferredSize(gfx::Size(popup_size.width(), kHeaderHeight));
 +  icon_ = header->AddChildView(std::make_unique<views::ImageView>());
 +  icon_->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
 +  icon_->SetImageSize(gfx::Size(kIconSize, kIconSize));
@@ -1023,23 +1056,21 @@
 +      views::kFlexBehaviorKey,
 +      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
 +                               views::MaximumFlexSizeRule::kUnbounded));
-+  // "Open in new tab" isn't separately labeled background/foreground: the
-+  // keyboard shortcut-less bubble keeps the primary action obvious.
-+  ActionButton(u"New Tab", header,
++  ActionButton(kOpenInNewIcon, u"Open in new tab", header,
 +               base::BindRepeating(
 +                   [](HeliumLinkPeekView* view) {
 +                     view->on_open_tab_.Run(true);
 +                   },
 +                   base::Unretained(this)));
-+  ActionButton(u"Split", header,
++  ActionButton(kSplitSceneIcon, u"Open in split view", header,
 +               base::BindRepeating(
 +                   [](HeliumLinkPeekView* view) { view->on_open_split_.Run(); },
 +                   base::Unretained(this)));
-+  ActionButton(u"Copy Link", header,
++  ActionButton(vector_icons::kContentCopyIcon, u"Copy link", header,
 +               base::BindRepeating(
 +                   [](HeliumLinkPeekView* view) { view->on_copy_link_.Run(); },
 +                   base::Unretained(this)));
-+  ActionButton(u"Close", header,
++  ActionButton(kCloseIcon, u"Close", header,
 +               base::BindRepeating(
 +                   [](HeliumLinkPeekView* view) { view->Close(); },
 +                   base::Unretained(this)));
