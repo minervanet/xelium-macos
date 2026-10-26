@@ -54,7 +54,7 @@
 
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
-@@ -16,6 +16,91 @@
+@@ -16,6 +16,92 @@
    ]
    deps = [
      "//chrome/browser/ui/browser_window",
@@ -131,6 +131,7 @@
 +    "//chrome/browser/ui/tabs:tab_model",
 +    "//chrome/browser/ui/tabs:tab_strip",
 +    "//components/bookmarks/browser",
++    "//components/favicon/content",
 +    "//components/favicon/core",
 +    "//components/favicon_base",
 +    "//components/history/core/browser",
@@ -364,7 +365,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.h
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,154 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -389,11 +390,11 @@
 +#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 +#include "ui/gfx/image/image.h"
 +#include "ui/gfx/native_ui_types.h"
++#include "ui/views/focus/focus_manager.h"
 +
 +class BrowserWindowInterface;
 +
 +namespace views {
-+class FocusManager;
 +class Widget;
 +}  // namespace views
 +
@@ -419,7 +420,8 @@
 +// commands use to outrank the menu — and consumes plain Cmd+T / Cmd+L only
 +// while the pref is on. Menu clicks and other invocations still execute
 +// IDC_NEW_TAB / IDC_FOCUS_LOCATION normally.
-+class HeliumCommandBarController : public ui::AcceleratorTarget {
++class HeliumCommandBarController : public ui::AcceleratorTarget,
++                                   public views::FocusChangeListener {
 + public:
 +  DECLARE_USER_DATA(HeliumCommandBarController);
 +
@@ -463,6 +465,12 @@
 +  // ui::AcceleratorTarget:
 +  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
 +  bool CanHandleAccelerators() const override;
++
++  // views::FocusChangeListener: the window's FocusManager dies before this
++  // controller on browser shutdown. Clear the pointer there so the
++  // destructor never calls into freed memory (crash seen in the wild:
++  // UnregisterAccelerators on a dead manager during Browser teardown).
++  void OnFocusManagerDestroying(views::FocusManager* focus_manager) override;
 +
 + private:
 +  void OnWidgetClosed() {
@@ -515,7 +523,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,508 @@
+@@ -0,0 +1,524 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -598,7 +606,9 @@
 +
 +HeliumCommandBarController::~HeliumCommandBarController() {
 +  if (focus_manager_) {
++    focus_manager_->RemoveFocusChangeListener(this);
 +    focus_manager_->UnregisterAccelerators(this);
++    focus_manager_ = nullptr;
 +  }
 +}
 +
@@ -658,11 +668,25 @@
 +
 +void HeliumCommandBarController::RegisterAccelerators(
 +    views::FocusManager* focus_manager) {
++  if (!focus_manager || focus_manager == focus_manager_) {
++    return;
++  }
 +  focus_manager_ = focus_manager;
++  // Track manager lifetime: it dies before this controller on shutdown.
++  focus_manager_->AddFocusChangeListener(this);
 +  for (const ui::KeyboardCode key : {ui::VKEY_T, ui::VKEY_L}) {
 +    focus_manager_->RegisterAccelerator(
 +        ui::Accelerator(key, ui::EF_PLATFORM_ACCELERATOR),
 +        ui::AcceleratorManager::kHighPriority, this);
++  }
++}
++
++void HeliumCommandBarController::OnFocusManagerDestroying(
++    views::FocusManager* focus_manager) {
++  if (focus_manager == focus_manager_) {
++    // Manager is dying; its AcceleratorManager dies with it, so there is
++    // nothing left to unregister from. Just drop the pointer.
++    focus_manager_ = nullptr;
 +  }
 +}
 +
