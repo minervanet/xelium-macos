@@ -11,7 +11,7 @@
 
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
-@@ -20,6 +20,27 @@
+@@ -20,6 +20,42 @@
    ]
  }
  
@@ -19,6 +19,8 @@
 +  sources = [
 +    "helium_command_bar_controller.cc",
 +    "helium_command_bar_controller.h",
++    "helium_command_bar_model.cc",
++    "helium_command_bar_model.h",
 +    "helium_command_bar_view.cc",
 +    "helium_command_bar_view.h",
 +  ]
@@ -30,6 +32,19 @@
 +  ]
 +
 +  deps = [
++    "//chrome/browser/bookmarks",
++    "//chrome/browser/history",
++    "//chrome/browser/search_engines",
++    "//chrome/browser/ui/navigator",
++    "//chrome/browser/ui/tabs:tab_model",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//components/bookmarks/browser",
++    "//components/history/core/browser",
++    "//components/keyed_service/core",
++    "//components/search_engines",
++    "//content/public/browser",
++    "//ui/base",
++    "//ui/color",
 +    "//ui/events",
 +    "//ui/gfx",
 +    "//ui/views",
@@ -170,7 +185,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.h
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,90 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -178,8 +193,16 @@
 +#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_CONTROLLER_H_
 +#define CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_CONTROLLER_H_
 +
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/functional/callback_forward.h"
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/weak_ptr.h"
++#include "base/task/cancelable_task_tracker.h"
++#include "chrome/browser/ui/helium/helium_command_bar_model.h"
++#include "components/history/core/browser/history_types.h"
 +#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 +#include "ui/gfx/native_ui_types.h"
 +
@@ -188,6 +211,8 @@
 +namespace views {
 +class Widget;
 +}  // namespace views
++
++class HeliumCommandBarView;
 +
 +// Per-window native command bar (floating URL/command palette).
 +//
@@ -218,14 +243,34 @@
 +  void Hide();
 +  bool IsShowing() const;
 +
++  // Rebuilds results for |query|: tabs, bookmarks and commands synchronously,
++  // history asynchronously. Called by the view on every keystroke.
++  void OnQueryChanged(const std::u16string& query);
++  // Opens or switches to items_[index], then closes the bar.
++  void ActivateItem(size_t index);
++
 +  base::WeakPtr<HeliumCommandBarController> GetWeakPtr();
 +
 + private:
-+  void OnWidgetClosed() { widget_ = nullptr; }
++  void OnWidgetClosed() {
++    widget_ = nullptr;
++    view_ = nullptr;
++  }
++  void OnHistoryResults(int seq,
++                        const std::u16string& query,
++                        history::QueryResults results);
++  void PushItems(std::vector<HeliumCommandBarItem> items);
 +
 +  raw_ptr<BrowserWindowInterface> browser_;
 +  // Owned by the widget itself (deleted on close); null when hidden.
 +  raw_ptr<views::Widget> widget_ = nullptr;
++  // Owned by |widget_|; null when hidden.
++  raw_ptr<HeliumCommandBarView> view_ = nullptr;
++  std::vector<HeliumCommandBarItem> items_;
++  std::u16string last_query_;
++  int history_seq_ = 0;
++  // Cancels in-flight history queries on each keystroke and on destruction.
++  base::CancelableTaskTracker history_tracker_;
 +  ui::ScopedUnownedUserData<HeliumCommandBarController> scoped_unowned_user_data_;
 +  base::WeakPtrFactory<HeliumCommandBarController> weak_factory_{this};
 +};
@@ -234,7 +279,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,218 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -243,7 +288,18 @@
 +
 +#include "base/functional/bind.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/bookmarks/bookmark_model_factory.h"
++#include "chrome/browser/history/history_service_factory.h"
 +#include "chrome/browser/ui/helium/helium_command_bar_view.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/navigator/browser_navigator.h"
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/history/core/browser/history_service.h"
++#include "components/keyed_service/core/service_access_type.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/page_transition_types.h"
++#include "ui/base/window_open_disposition.h"
 +#include "ui/views/widget/widget.h"
 +
 +DEFINE_USER_DATA(HeliumCommandBarController);
@@ -277,9 +333,17 @@
 +    widget_->Activate();
 +    return;
 +  }
-+  widget_ = HeliumCommandBarView::Show(
++  HeliumCommandBarView* view = HeliumCommandBarView::Show(
 +      parent, base::BindOnce(&HeliumCommandBarController::OnWidgetClosed,
-+                             weak_factory_.GetWeakPtr()));
++                             weak_factory_.GetWeakPtr()),
++      base::BindRepeating(&HeliumCommandBarController::OnQueryChanged,
++                          weak_factory_.GetWeakPtr()),
++      base::BindRepeating(&HeliumCommandBarController::ActivateItem,
++                          weak_factory_.GetWeakPtr()));
++  widget_ = view->GetWidget();
++  view_ = view;
++  // Populate with the current (empty) query so open tabs show immediately.
++  OnQueryChanged(u"");
 +}
 +
 +void HeliumCommandBarController::Hide() {
@@ -301,10 +365,143 @@
 +HeliumCommandBarController::GetWeakPtr() {
 +  return weak_factory_.GetWeakPtr();
 +}
++
++void HeliumCommandBarController::OnQueryChanged(const std::u16string& query) {
++  last_query_ = query;
++
++  // Synchronous sources first so keystrokes feel instant; history merges in
++  // when its query returns.
++  std::vector<HeliumCommandBarItem> items =
++      helium_command_bar_model::TabsForQuery(browser_->GetTabStripModel(),
++                                             query);
++  bookmarks::BookmarkModel* bookmarks = BookmarkModelFactory::GetForBrowserContext(
++      browser_->GetProfile());
++  auto bookmark_items =
++      helium_command_bar_model::BookmarksForQuery(bookmarks, query);
++  items.insert(items.end(), std::make_move_iterator(bookmark_items.begin()),
++               std::make_move_iterator(bookmark_items.end()));
++  auto command_items = helium_command_bar_model::CommandsForQuery(query);
++  items.insert(items.end(), std::make_move_iterator(command_items.begin()),
++               std::make_move_iterator(command_items.end()));
++  if (auto direct = helium_command_bar_model::UrlOrSearchForQuery(
++          browser_->GetProfile(), query)) {
++    items.push_back(std::move(*direct));
++  }
++  helium_command_bar_model::SortAndCap(items);
++  PushItems(std::move(items));
++
++  // History is async. Sequence-guard so a slow query from an older keystroke
++  // can never overwrite newer results.
++  history_tracker_.TryCancelAll();
++  if (query.empty()) {
++    return;
++  }
++  history::HistoryService* history = HistoryServiceFactory::GetForProfile(
++      browser_->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
++  if (!history) {
++    return;
++  }
++  const int seq = ++history_seq_;
++  history::QueryOptions options;
++  options.max_count = 30;
++  history->QueryHistory(
++      query, options,
++      base::BindOnce(&HeliumCommandBarController::OnHistoryResults,
++                     weak_factory_.GetWeakPtr(), seq, query),
++      &history_tracker_);
++}
++
++void HeliumCommandBarController::OnHistoryResults(
++    int seq,
++    const std::u16string& query,
++    history::QueryResults results) {
++  if (seq != history_seq_ || query != last_query_ || !view_) {
++    return;
++  }
++  std::vector<HeliumCommandBarItem> items =
++      helium_command_bar_model::TabsForQuery(browser_->GetTabStripModel(),
++                                             query);
++  bookmarks::BookmarkModel* bookmarks = BookmarkModelFactory::GetForBrowserContext(
++      browser_->GetProfile());
++  auto bookmark_items =
++      helium_command_bar_model::BookmarksForQuery(bookmarks, query);
++  items.insert(items.end(), std::make_move_iterator(bookmark_items.begin()),
++               std::make_move_iterator(bookmark_items.end()));
++  auto history_items = helium_command_bar_model::HistoryItemsForRows(
++      results, query);
++  items.insert(items.end(), std::make_move_iterator(history_items.begin()),
++               std::make_move_iterator(history_items.end()));
++  auto command_items = helium_command_bar_model::CommandsForQuery(query);
++  items.insert(items.end(), std::make_move_iterator(command_items.begin()),
++               std::make_move_iterator(command_items.end()));
++  if (auto direct = helium_command_bar_model::UrlOrSearchForQuery(
++          browser_->GetProfile(), query)) {
++    items.push_back(std::move(*direct));
++  }
++  helium_command_bar_model::SortAndCap(items);
++  PushItems(std::move(items));
++}
++
++void HeliumCommandBarController::PushItems(
++    std::vector<HeliumCommandBarItem> items) {
++  items_ = std::move(items);
++  if (view_) {
++    view_->SetResults(items_);
++  }
++}
++
++void HeliumCommandBarController::ActivateItem(size_t index) {
++  if (index >= items_.size()) {
++    return;
++  }
++  const HeliumCommandBarItem item = items_[index];
++  if (item.type == HeliumCommandBarItem::Type::kTab) {
++    TabStripModel* tab_strip = browser_->GetTabStripModel();
++    if (tab_strip && item.tab_index >= 0 &&
++        item.tab_index < tab_strip->count()) {
++      tab_strip->ActivateTabAt(item.tab_index);
++    }
++    Hide();
++    return;
++  }
++  GURL url;
++  switch (item.type) {
++    case HeliumCommandBarItem::Type::kTab:
++      break;  // Handled above.
++    case HeliumCommandBarItem::Type::kCommand:
++      switch (item.command) {
++        case HeliumCommandBarItem::Command::kNewTab:
++          url = GURL("chrome://newtab/");
++          break;
++        case HeliumCommandBarItem::Command::kOpenSettings:
++          url = GURL("chrome://settings");
++          break;
++        case HeliumCommandBarItem::Command::kOpenHistory:
++          url = GURL("chrome://history");
++          break;
++        case HeliumCommandBarItem::Command::kOpenDownloads:
++          url = GURL("chrome://downloads");
++          break;
++      }
++      break;
++    case HeliumCommandBarItem::Type::kBookmark:
++    case HeliumCommandBarItem::Type::kHistory:
++    case HeliumCommandBarItem::Type::kUrl:
++    case HeliumCommandBarItem::Type::kSearch:
++      url = item.url;
++      break;
++  }
++  if (url.is_valid()) {
++    NavigateParams params(browser_, url, ui::PAGE_TRANSITION_TYPED);
++    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    Navigate(&params);
++  }
++  Hide();
++}
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.h
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,74 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -312,37 +509,46 @@
 +#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_VIEW_H_
 +#define CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_VIEW_H_
 +
-+#include "base/memory/raw_ptr.h"
++#include <stddef.h>
++
++#include <vector>
++
 +#include "base/functional/callback_forward.h"
 +#include "base/memory/raw_ptr.h"
++#include "chrome/browser/ui/helium/helium_command_bar_model.h"
 +#include "ui/views/controls/textfield/textfield_controller.h"
 +#include "ui/views/widget/widget_delegate.h"
 +
-+namespace gfx {
-+class Rect;
-+}
-+
 +namespace views {
++class Label;
 +class Textfield;
++class View;
 +class Widget;
 +}  // namespace views
 +
-+// Floating command bar popup: a single text field with a results list below.
-+// Skeleton: the field is live and closable; result rows arrive next.
++// Floating command bar popup: a text field with a results list below.
++// Rows are rebuilt on every keystroke; extras are clipped, never scrolled.
 +class HeliumCommandBarView : public views::WidgetDelegate,
 +                             public views::TextfieldController {
 + public:
-+  // Creates, shows and focuses the popup parented to |parent|. |on_closed|
-+  // runs when the widget begins closing. Returns the owning widget
-+  // (deleted on close).
-+  static views::Widget* Show(gfx::NativeView parent,
-+                               base::OnceClosure on_closed);
++  // Creates, focuses and shows the popup parented to |parent|. |on_closed|
++  // runs when the widget begins closing, |on_query| on every keystroke,
++  // |on_activate| with the chosen result index. Returns the owning view
++  // (owned by the widget, deleted on close).
++  static HeliumCommandBarView* Show(
++      gfx::NativeView parent,
++      base::OnceClosure on_closed,
++      base::RepeatingCallback<void(const std::u16string&)> on_query,
++      base::RepeatingCallback<void(size_t)> on_activate);
 +
 +  HeliumCommandBarView(const HeliumCommandBarView&) = delete;
 +  HeliumCommandBarView& operator=(const HeliumCommandBarView&) = delete;
 +  ~HeliumCommandBarView() override;
 +
 +  void Close();
++
++  // Rebuilds the rows from |items| and resizes the popup to fit.
++  void SetResults(const std::vector<HeliumCommandBarItem>& items);
 +
 +  // views::TextfieldController:
 +  void ContentsChanged(views::Textfield* sender,
@@ -351,20 +557,29 @@
 +                      const ui::KeyEvent& event) override;
 +
 + private:
-+  explicit HeliumCommandBarView(gfx::NativeView parent,
-+                                base::OnceClosure on_closed);
++  HeliumCommandBarView(gfx::NativeView parent,
++                       base::OnceClosure on_closed,
++                       base::RepeatingCallback<void(const std::u16string&)>
++                           on_query,
++                       base::RepeatingCallback<void(size_t)> on_activate);
 +
 +  void WindowClosing() override;
++  void MoveSelection(int delta);
++  void UpdateRowHighlight();
 +
 +  base::OnceClosure on_closed_;
++  base::RepeatingCallback<void(const std::u16string&)> on_query_;
++  base::RepeatingCallback<void(size_t)> on_activate_;
 +  raw_ptr<views::Textfield> input_ = nullptr;
++  raw_ptr<views::View> results_ = nullptr;
++  size_t selected_ = 0;
 +};
 +
 +#endif  // CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_VIEW_H_
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,253 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -373,29 +588,124 @@
 +
 +#include <utility>
 +
++#include "base/functional/bind.h"
++#include "base/strings/utf_string_conversions.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
 +#include "ui/events/event.h"
 +#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/font_list.h"
 +#include "ui/gfx/geometry/rect.h"
++#include "ui/views/controls/label.h"
 +#include "ui/views/controls/textfield/textfield.h"
 +#include "ui/views/layout/box_layout.h"
++#include "ui/views/view_class_properties.h"
 +#include "ui/views/widget/widget.h"
 +
 +namespace {
 +
-+// Width matches Lumno's panel density; height fits the single input row for
-+// now and grows with the results list later.
++// Matches Lumno's panel density. Rows are a fixed height; the popup grows
++// with the result count and clips extras instead of scrolling.
 +constexpr int kBarWidth = 560;
 +constexpr int kInputHeight = 40;
-+constexpr int kVerticalPadding = 16;
++constexpr int kRowHeight = 46;
++constexpr int kHorizontalPadding = 12;
++
++const char* TagForType(HeliumCommandBarItem::Type type) {
++  switch (type) {
++    case HeliumCommandBarItem::Type::kTab:
++      return "Switch";
++    case HeliumCommandBarItem::Type::kBookmark:
++      return "Bookmark";
++    case HeliumCommandBarItem::Type::kHistory:
++      return "History";
++    case HeliumCommandBarItem::Type::kCommand:
++      return "Command";
++    case HeliumCommandBarItem::Type::kUrl:
++      return "Open";
++    case HeliumCommandBarItem::Type::kSearch:
++      return "Search";
++  }
++}
++
++// One result row. Clicking activates it; the leading marker shows selection.
++class ResultRowView : public views::View {
++  METADATA_HEADER(ResultRowView, views::View)
++
++ public:
++  ResultRowView(HeliumCommandBarItem item,
++                base::RepeatingClosure on_click) {
++    SetLayoutManager(std::make_unique<views::BoxLayout>(
++        views::BoxLayout::Orientation::kHorizontal,
++        gfx::Insets::VH(4, kHorizontalPadding), 8));
++    marker_ = AddChildView(std::make_unique<views::Label>(u""));
++    marker_->SetPreferredSize(gfx::Size(16, kRowHeight));
++    auto* text = AddChildView(std::make_unique<views::View>());
++    text->SetLayoutManager(std::make_unique<views::BoxLayout>(
++        views::BoxLayout::Orientation::kVertical, gfx::Insets(), 1));
++    text->SetProperty(
++        views::kFlexBehaviorKey,
++        views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
++                                 views::MaximumFlexSizeRule::kUnbounded));
++    auto* title = text->AddChildView(std::make_unique<views::Label>(
++        item.title, views::style::CONTEXT_LABEL,
++        views::style::STYLE_PRIMARY));
++    title->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++    title->SetElideBehavior(gfx::ELIDE_TAIL);
++    title_ = title;
++    const std::u16string subtitle = item.url_spec.empty()
++                                        ? u""
++                                        : base::UTF8ToUTF16(item.url_spec);
++    auto* url = text->AddChildView(
++        std::make_unique<views::Label>(subtitle, views::style::CONTEXT_LABEL,
++                                       views::style::STYLE_SECONDARY));
++    url->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++    url->SetElideBehavior(gfx::ELIDE_TAIL);
++    url->SetFontList(
++        url->font_list().DeriveWithSizeDelta(-2));
++    auto* tag = AddChildView(std::make_unique<views::Label>(
++        base::UTF8ToUTF16(TagForType(item.type)),
++        views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
++    tag->SetFontList(tag->font_list().DeriveWithSizeDelta(-1));
++    SetPreferredSize(
++        gfx::Size(kBarWidth - 2 * kHorizontalPadding, kRowHeight));
++    on_click_ = std::move(on_click);
++  }
++  ~ResultRowView() override = default;
++
++  void SetSelected(bool selected) {
++    marker_->SetText(selected ? u"\u2192" : u"");
++    title_->SetFontList(title_->font_list().DeriveWithWeight(
++        selected ? gfx::Font::Weight::BOLD : gfx::Font::Weight::NORMAL));
++  }
++
++  bool OnMousePressed(const ui::MouseEvent& event) override {
++    if (event.IsOnlyLeftMouseButton() && !on_click_.is_null()) {
++      on_click_.Run();
++      return true;
++    }
++    return false;
++  }
++
++ private:
++  raw_ptr<views::Label> marker_ = nullptr;
++  raw_ptr<views::Label> title_ = nullptr;
++  base::RepeatingClosure on_click_;
++};
++
++BEGIN_METADATA(ResultRowView)
++END_METADATA
 +
 +}  // namespace
 +
 +// static
-+views::Widget* HeliumCommandBarView::Show(gfx::NativeView parent,
-+                                          base::OnceClosure on_closed) {
-+  auto delegate =
-+      std::unique_ptr<HeliumCommandBarView>(new HeliumCommandBarView(
-+          parent, std::move(on_closed)));
++HeliumCommandBarView* HeliumCommandBarView::Show(
++    gfx::NativeView parent,
++    base::OnceClosure on_closed,
++    base::RepeatingCallback<void(const std::u16string&)> on_query,
++    base::RepeatingCallback<void(size_t)> on_activate) {
++  auto delegate = std::unique_ptr<HeliumCommandBarView>(
++      new HeliumCommandBarView(parent, std::move(on_closed),
++                               std::move(on_query), std::move(on_activate)));
 +  HeliumCommandBarView* view = delegate.get();
 +  views::Widget* widget = new views::Widget;
 +  views::Widget::InitParams params(
@@ -411,30 +721,38 @@
 +  // Hang the bar near the top of the browser window, Lumno-style.
 +  const gfx::Rect parent_bounds =
 +      views::Widget::GetWidgetForNativeView(parent)->GetWindowBoundsInScreen();
-+  const int height = kInputHeight + kVerticalPadding;
 +  widget->SetBounds(gfx::Rect(
 +      parent_bounds.x() + (parent_bounds.width() - kBarWidth) / 2,
-+      parent_bounds.y() + parent_bounds.height() / 5, kBarWidth, height));
++      parent_bounds.y() + parent_bounds.height() / 5, kBarWidth,
++      kInputHeight + 2 * 8));
 +  widget->Show();
 +  view->input_->RequestFocus();
-+  return widget;
++  return view;
 +}
 +
-+HeliumCommandBarView::HeliumCommandBarView(gfx::NativeView parent,
-+                                           base::OnceClosure on_closed)
-+    : on_closed_(std::move(on_closed)) {
++HeliumCommandBarView::HeliumCommandBarView(
++    gfx::NativeView parent,
++    base::OnceClosure on_closed,
++    base::RepeatingCallback<void(const std::u16string&)> on_query,
++    base::RepeatingCallback<void(size_t)> on_activate)
++    : on_closed_(std::move(on_closed)),
++      on_query_(std::move(on_query)),
++      on_activate_(std::move(on_activate)) {
 +  SetModalType(ui::mojom::ModalType::kNone);
 +  auto contents = std::make_unique<views::View>();
 +  contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
-+      views::BoxLayout::Orientation::kVertical,
-+      gfx::Insets::VH(kVerticalPadding / 2, 12), 0));
++      views::BoxLayout::Orientation::kVertical, gfx::Insets::VH(8, 12), 0));
 +  auto input = std::make_unique<views::Textfield>();
-+  // TODO(command-bar): move to IDS_ strings with the results list.
 +  input->SetPlaceholderText(u"Search or type a URL...");
 +  input->SetPreferredSize(gfx::Size(kBarWidth, kInputHeight));
 +  input->SetController(this);
 +  input_ = input.get();
 +  contents->AddChildView(std::move(input));
++  auto results = std::make_unique<views::View>();
++  results->SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kVertical, gfx::Insets(), 0));
++  results_ = results.get();
++  contents->AddChildView(std::move(results));
 +  SetContentsView(std::move(contents));
 +}
 +
@@ -446,6 +764,42 @@
 +  }
 +}
 +
++void HeliumCommandBarView::SetResults(
++    const std::vector<HeliumCommandBarItem>& items) {
++  results_->RemoveAllChildViews();
++  selected_ = 0;
++  for (size_t i = 0; i < items.size(); ++i) {
++    auto row = std::make_unique<ResultRowView>(
++        items[i], base::BindRepeating(
++                      [](HeliumCommandBarView* view, size_t index) {
++                        view->on_activate_.Run(index);
++                      },
++                      base::Unretained(this), i));
++    results_->AddChildView(std::move(row));
++  }
++  UpdateRowHighlight();
++  if (GetWidget()) {
++    GetWidget()->SetSize(GetContentsView()->GetPreferredSize());
++  }
++}
++
++void HeliumCommandBarView::MoveSelection(int delta) {
++  const size_t count = results_->children().size();
++  if (count == 0) {
++    return;
++  }
++  selected_ = (selected_ + count + delta) % count;
++  UpdateRowHighlight();
++}
++
++void HeliumCommandBarView::UpdateRowHighlight() {
++  const auto& children = results_->children();
++  for (size_t i = 0; i < children.size(); ++i) {
++    static_cast<ResultRowView*>(children[i].get())->SetSelected(i ==
++                                                                selected_);
++  }
++}
++
 +void HeliumCommandBarView::WindowClosing() {
 +  std::move(on_closed_).Run();
 +}
@@ -453,15 +807,30 @@
 +void HeliumCommandBarView::ContentsChanged(
 +    views::Textfield* sender,
 +    const std::u16string& new_contents) {
-+  // Result filtering arrives next; the live field is enough for the skeleton.
++  if (!on_query_.is_null()) {
++    on_query_.Run(new_contents);
++  }
 +}
 +
 +bool HeliumCommandBarView::HandleKeyEvent(views::Textfield* sender,
 +                                          const ui::KeyEvent& event) {
-+  if (event.key_code() == ui::VKEY_ESCAPE) {
-+    Close();
-+    return true;
++  switch (event.key_code()) {
++    case ui::VKEY_ESCAPE:
++      Close();
++      return true;
++    case ui::VKEY_UP:
++      MoveSelection(-1);
++      return true;
++    case ui::VKEY_DOWN:
++      MoveSelection(1);
++      return true;
++    case ui::VKEY_RETURN:
++      if (!results_->children().empty()) {
++        on_activate_.Run(selected_);
++      }
++      return true;
++    default:
++      return false;
 +  }
-+  return false;
 +}
 
