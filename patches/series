@@ -45,7 +45,6 @@ helium/settings/visual-tab-switcher.patch
 z-xelium-rebrand.patch
 helium/ui/default-appearance-settings.patch
 helium/ui/xelium-report-on-github.patch
-helium/ui/xelium-bundled-extensions.patch
 z-xelium-sparkle-updates.patch
 helium/ui/floating-url-bar.patch
 helium/ui/link-peek.patch
