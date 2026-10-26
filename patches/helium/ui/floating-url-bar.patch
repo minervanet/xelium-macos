@@ -365,7 +365,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.h
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,157 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -511,6 +511,9 @@
 +  int history_seq_ = 0;
 +  // Cancels in-flight history queries on each keystroke and on destruction.
 +  base::CancelableTaskTracker history_tracker_;
++  // Most recent history rows, re-scored for interim paints so the list does
++  // not flash out and back on every keystroke while a fresh query runs.
++  history::QueryResults last_history_rows_;
 +  int items_seq_ = 0;
 +  // Favicon cache keyed by URL spec; avoids refetching while scrolling keys.
 +  std::map<std::string, gfx::Image> favicon_cache_;
@@ -523,7 +526,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,524 @@
+@@ -0,0 +1,533 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -725,7 +728,15 @@
 +
 +void HeliumCommandBarController::OnQueryChanged(const std::u16string& query) {
 +  last_query_ = query;
-+  PushItems(CollectResults(query, /*history_rows=*/nullptr));
++  if (query.empty()) {
++    last_history_rows_ = history::QueryResults();
++  }
++  // Paint immediately from the synchronous sources plus the previous
++  // keystroke's history rows re-scored for this query. Without the
++  // carryover, every keystroke flashes twice: once when history rows drop
++  // out, once when the fresh query returns.
++  PushItems(CollectResults(
++      query, last_history_rows_.empty() ? nullptr : &last_history_rows_));
 +
 +  // History is async. Sequence-guard so a slow query from an older keystroke
 +  // can never overwrite newer results.
@@ -755,7 +766,8 @@
 +  if (seq != history_seq_ || query != last_query_ || !view_) {
 +    return;
 +  }
-+  PushItems(CollectResults(query, &results));
++  last_history_rows_ = std::move(results);
++  PushItems(CollectResults(query, &last_history_rows_));
 +}
 +
 +void HeliumCommandBarController::PushItems(
