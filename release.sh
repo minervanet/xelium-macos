@@ -223,9 +223,10 @@ Unofficial, personal macOS arm64 build of [Helium](https://github.com/imputnet/h
 
 ### Bundled extensions
 
-- [lumno](https://github.com/kubai087/lumno-extension) 1.2.0, keyboard-first command bar (GPL-3.0)
 - [DiaPeek](https://github.com/VanDerLars/DiaPeek), link peek overlay (MIT)
 - [uBlock Origin](https://github.com/gorhill/uBlock), ships with Helium (GPL-3.0)
+
+The keyboard-first command bar is a native Xelium feature (Settings > Appearance > Command bar), not an extension.
 
 ### Xelium patches
 

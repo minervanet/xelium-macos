@@ -1,66 +1,60 @@
 --- a/chrome/browser/extensions/BUILD.gn
 +++ b/chrome/browser/extensions/BUILD.gn
-@@ -640,6 +640,8 @@
+@@ -640,6 +640,7 @@
      "//services/metrics/public/cpp:ukm_builders",
      "//storage/browser",
      "//third_party/ublock",
 +    "//third_party/xelium_extensions:diapeek_pak",
-+    "//third_party/xelium_extensions:lumno_pak",
      "//third_party/zlib/google:zip",
      "//ui/base/accelerators/global_accelerator_listener",
      "//ui/base/unowned_user_data",
 --- a/chrome/chrome_paks.gni
 +++ b/chrome/chrome_paks.gni
-@@ -148,6 +148,8 @@
+@@ -148,6 +148,7 @@
        "$root_gen_dir/third_party/blink/public/resources/inspector_overlay_resources.pak",
        "$root_gen_dir/third_party/blink/public/strings/permission_element_generated_strings.pak",
        "$root_gen_dir/third_party/ublock/resources/ublock_resources.pak",
 +      "$root_gen_dir/third_party/xelium_extensions/resources/diapeek_resources.pak",
-+      "$root_gen_dir/third_party/xelium_extensions/resources/lumno_resources.pak",
        "$root_gen_dir/ui/resources/ui_lottie_resources.pak",
        "$root_gen_dir/ui/webui/resources/webui_resources.pak",
      ]
-@@ -186,6 +188,8 @@
+@@ -186,6 +187,7 @@
        "//third_party/blink/public:resources",
        "//third_party/blink/public/strings:permission_element_generated_strings",
        "//third_party/ublock",
 +      "//third_party/xelium_extensions:diapeek_pak",
-+      "//third_party/xelium_extensions:lumno_pak",
        "//ui/resources:ui_lottie_resources_grd",
        "//ui/webui/resources",
      ]
 --- a/chrome/browser/extensions/chrome_component_extension_resource_manager.cc
 +++ b/chrome/browser/extensions/chrome_component_extension_resource_manager.cc
-@@ -34,6 +34,8 @@
+@@ -34,6 +34,7 @@
  #include "pdf/buildflags.h"
  #include "ui/base/resource/resource_bundle.h"
  #include "third_party/ublock/resources/grit/ublock_resources_map.h"
 +#include "third_party/xelium_extensions/resources/grit/diapeek_resources_map.h"
-+#include "third_party/xelium_extensions/resources/grit/lumno_resources_map.h"
  
  #if BUILDFLAG(IS_CHROMEOS)
  #include "ash/keyboard/ui/resources/keyboard_resource_util.h"
-@@ -131,6 +133,8 @@
+@@ -131,6 +132,7 @@
    }
    AddComponentResourceEntries(kUblockResources);
    AddComponentResourceEntries(kExtstoreFixupsResources);
-+  AddComponentResourceEntries(kLumnoResources);
 +  AddComponentResourceEntries(kDiapeekResources);
  
  #if !BUILDFLAG(IS_ANDROID)
    if (base::FeatureList::IsEnabled(features::kIndigo)) {
 --- a/chrome/browser/extensions/component_loader.cc
 +++ b/chrome/browser/extensions/component_loader.cc
-@@ -71,6 +71,8 @@
+@@ -71,6 +71,7 @@
  #include "ui/base/l10n/l10n_util.h"
  #include "ui/base/resource/resource_bundle.h"
  #include "third_party/ublock/resources/grit/ublock_resources.h"
 +#include "third_party/xelium_extensions/resources/grit/diapeek_resources.h"
-+#include "third_party/xelium_extensions/resources/grit/lumno_resources.h"
  
  #if BUILDFLAG(IS_CHROMEOS)
  #include "ash/constants/ash_extension_constants.h"
-@@ -630,6 +632,33 @@
+@@ -630,6 +631,32 @@
    }
  }
  
@@ -70,7 +64,6 @@
 +    const char* path;
 +    const char* name;
 +  } const kExtensions[] = {
-+      {IDR_LUMNO_MANIFEST_JSON, "lumno", "lumno"},
 +      {IDR_DIAPEEK_MANIFEST_JSON, "diapeek", "DiaPeek"},
 +  };
 +
@@ -94,7 +87,7 @@
  void ComponentLoader::AddExtstoreFixups() {
    Add(IDR_EXTSTORE_FIXUPS_MANIFEST_JSON,
        base::FilePath(FILE_PATH_LITERAL("extstore_fixups")));
-@@ -713,6 +742,7 @@
+@@ -713,6 +740,7 @@
    if (!skip_session_components) {
      AddWebStoreApp();
      AddUBlock();
@@ -114,44 +107,38 @@
    void AddChromeApp();
 --- a/chrome/browser/extensions/component_extensions_allowlist/allowlist.cc
 +++ b/chrome/browser/extensions/component_extensions_allowlist/allowlist.cc
-@@ -25,6 +25,8 @@
+@@ -25,6 +25,7 @@
  #include "extensions/common/constants.h"
  #include "printing/buildflags/buildflags.h"
  #include "third_party/ublock/resources/grit/ublock_resources.h"
 +#include "third_party/xelium_extensions/resources/grit/diapeek_resources.h"
-+#include "third_party/xelium_extensions/resources/grit/lumno_resources.h"
  
  #if BUILDFLAG(IS_CHROMEOS)
  #include "ash/constants/ash_extension_constants.h"
-@@ -46,6 +48,8 @@
+@@ -46,6 +47,7 @@
        extension_misc::kPdfExtensionId,
        helium::kUBlockOriginComponentId,
        helium::kExtstoreFixupsExtensionId,
-+      helium::kLumnoComponentId,
 +      helium::kDiaPeekComponentId,
  #if BUILDFLAG(IS_CHROMEOS)
        extension_misc::kAssessmentAssistantExtensionId,
        extension_misc::kAccessibilityCommonExtensionId,
-@@ -108,6 +112,8 @@
+@@ -108,6 +110,7 @@
      case IDR_WEBSTORE_MANIFEST:
      case IDR_UBLOCK_MANIFEST_JSON:
      case IDR_EXTSTORE_FIXUPS_MANIFEST_JSON:
-+    case IDR_LUMNO_MANIFEST_JSON:
 +    case IDR_DIAPEEK_MANIFEST_JSON:
  
  #if BUILDFLAG(IS_CHROMEOS)
      // Separate ChromeOS list, as it is quite large.
 --- a/components/helium_services/extension_ids.h
 +++ b/components/helium_services/extension_ids.h
-@@ -17,6 +17,14 @@
+@@ -17,6 +17,11 @@
      // SHA1(kUBlockOriginComponentId)
      "70C2895ED505C532A80761F0928B821B103D0786";
  
 +// Extensions that Xelium bundles on top of the Helium defaults. Their ids are
 +// pinned through the "key" field of the shipped manifests.
-+inline constexpr char kLumnoComponentId[] =
-+    "fiidocnleimkoeanfnbidmknoocneiif";
-+
 +inline constexpr char kDiaPeekComponentId[] =
 +    "agdpocfenpmganldjhpojhileladdepc";
 +
@@ -160,7 +147,7 @@
  #endif  /* COMPONENTS_HELIUM_SERVICES_EXTENSION_IDS_H_ */
 --- a/extensions/common/manifest.h
 +++ b/extensions/common/manifest.h
-@@ -99,6 +99,14 @@
+@@ -99,6 +99,13 @@
      return id.value() == helium::kUblockOriginComponentIdHashed;
    }
  
@@ -168,8 +155,7 @@
 +  // browser (as opposed to being an implementation detail of Chrome).
 +  static inline bool IsXeliumBundledExtension(
 +      std::string_view extension_id) {
-+    return extension_id == helium::kLumnoComponentId ||
-+           extension_id == helium::kDiaPeekComponentId;
++    return extension_id == helium::kDiaPeekComponentId;
 +  }
 +
    static inline bool IsValidLocation(mojom::ManifestLocation location) {
@@ -185,7 +171,7 @@
  #include "extensions/common/manifest_handlers/background_info.h"
  #include "extensions/common/manifest_handlers/shared_module_info.h"
  #include "extensions/common/mojom/view_type.mojom.h"
-@@ -572,7 +573,12 @@
+@@ -572,7 +573,13 @@
    if (old_version.IsValid()) {
      info.Set(kInstallReason, kInstallReasonUpdate);
      info.Set(kInstallPreviousVersion, old_version.GetString());
@@ -193,9 +179,10 @@
 +  } else if (chrome_updated ||
 +             Manifest::IsXeliumBundledExtension(extension_id)) {
 +    // Xelium: extensions bundled with the browser are not installed by the
-+    // user, so they should not run their first-run experience (e.g. lumno's
-+    // welcome tab). Reporting "chrome_update" lets their listeners do their
-+    // one-time setup without treating it as a fresh user install.
++    // user, so they should not run their first-run experience (e.g. bundled
++    // extensions' welcome tabs). Reporting "chrome_update" lets their
++    // listeners do their one-time setup without treating it as a fresh user
++    // install.
      info.Set(kInstallReason, kInstallReasonChromeUpdate);
    } else {
      info.Set(kInstallReason, kInstallReasonInstall);
@@ -223,130 +210,6 @@
      location_text = IDS_EXTENSIONS_INSTALL_LOCATION_HELIUM;
      info.location = developer::Location::kHeliumComponent;
    } else if (info.location == developer::Location::kUnknown) {
---- a/chrome/browser/extensions/commands/command_service.cc
-+++ b/chrome/browser/extensions/commands/command_service.cc
-@@ -31,6 +31,7 @@
- #include "extensions/common/command.h"
- #include "extensions/common/extension_id.h"
- #include "extensions/common/feature_switch.h"
-+#include "extensions/common/manifest.h"
- #include "extensions/common/manifest_constants.h"
- #include "extensions/common/permissions/permissions_data.h"
- #include "ui/base/accelerators/command.h"
-@@ -568,6 +569,21 @@
-       return false;
-     return (command.accelerator().key_code() >= ui::VKEY_0 &&
-             command.accelerator().key_code() <= ui::VKEY_9);
-+  }
-+
-+  // Xelium: extensions bundled with the browser are allowed to claim the new
-+  // tab and focus location shortcuts, so their suggested keys get assigned
-+  // without the user having to rebind them manually.
-+  if (Manifest::IsXeliumBundledExtension(extension->id())) {
-+    const ui::Accelerator& accelerator = command.accelerator();
-+    const bool is_plain_modifier = (accelerator.IsCmdDown() ||
-+                                    accelerator.IsCtrlDown()) &&
-+                                   !accelerator.IsShiftDown() &&
-+                                   !accelerator.IsAltDown();
-+    if (is_plain_modifier && (accelerator.key_code() == ui::VKEY_T ||
-+                              accelerator.key_code() == ui::VKEY_L)) {
-+      return true;
-+    }
-   }
- 
-   // Not a global command, check if the command is a Chrome shortcut.
---- a/chrome/browser/extensions/extension_url_overrides.cc
-+++ b/chrome/browser/extensions/extension_url_overrides.cc
-@@ -24,10 +24,12 @@
- #include "chrome/browser/profiles/profile.h"
- #include "chrome/common/chrome_switches.h"
- #include "chrome/common/extensions/extension_constants.h"
-+#include "chrome/common/pref_names.h"
- #include "chrome/common/url_constants.h"
- #include "chrome/common/webui_url_constants.h"
- #include "components/favicon/core/favicon_service.h"
- #include "components/favicon_base/favicon_util.h"
-+#include "components/helium_services/extension_ids.h"
- #include "components/pref_registry/pref_registry_syncable.h"
- #include "components/prefs/pref_service.h"
- #include "components/prefs/scoped_user_pref_update.h"
-@@ -40,6 +42,7 @@
- #include "extensions/browser/extension_util.h"
- #include "extensions/browser/image_loader.h"
- #include "extensions/buildflags/buildflags.h"
-+#include "extensions/common/constants.h"
- #include "extensions/common/extension.h"
- #include "extensions/common/extension_resource.h"
- #include "extensions/common/icons/extension_icon_set.h"
-@@ -465,6 +468,17 @@
-     return false;
-   }
- 
-+  // Xelium: the bundled lumno extension registers a new tab page override so
-+  // that users can opt into it, but it must not take over the new tab page
-+  // unless they actually did.
-+  if (overrides[0].SchemeIs(extensions::kExtensionScheme) &&
-+      overrides[0].host() == helium::kLumnoComponentId &&
-+      !Profile::FromBrowserContext(browser_context)
-+           ->GetPrefs()
-+           ->GetBoolean(prefs::kUseLumnoNewTab)) {
-+    return false;
-+  }
-+
-   *url = overrides[0];
-   return true;
- }
---- a/chrome/browser/ui/browser_ui_prefs.cc
-+++ b/chrome/browser/ui/browser_ui_prefs.cc
-@@ -138,6 +138,11 @@
-   registry->RegisterBooleanPref(prefs::kVisualTabSwitcher, true);
-   registry->RegisterBooleanPref(prefs::kVisualTabSwitcherList, false);
- 
-+  // Xelium: the bundled lumno extension ships the new tab page. It also makes
-+  // the Cmd+T command bar work there, since lumno focuses its own search input
-+  // when the command fires on its new tab page.
-+  registry->RegisterBooleanPref(prefs::kUseLumnoNewTab, true);
-+
-   registry->RegisterBooleanPref(prefs::kShiftRightClickContextMenu, true);
- 
-   registry->RegisterBooleanPref(prefs::kShowZoomIndicator, true);
---- a/chrome/common/pref_names.h
-+++ b/chrome/common/pref_names.h
-@@ -611,6 +611,11 @@
-     "helium.browser.visual_tab_switcher";
- inline constexpr char kVisualTabSwitcherList[] =
-     "helium.browser.visual_tab_switcher_list";
-+
-+// A boolean pref set to true if the bundled lumno extension should be allowed
-+// to take over the new tab page.
-+inline constexpr char kUseLumnoNewTab[] =
-+    "helium.browser.use_lumno_new_tab";
- 
- // A boolean pref set to true if Shift+right-click should bypass page context
- // menu handlers and show the browser context menu.
---- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
-+++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -328,6 +328,8 @@
-       settings_api::PrefType::kBoolean;
-   (*s_allowlist)[::prefs::kVisualTabSwitcherList] =
-       settings_api::PrefType::kBoolean;
-+  (*s_allowlist)[::prefs::kUseLumnoNewTab] =
-+      settings_api::PrefType::kBoolean;
-   (*s_allowlist)[::prefs::kShiftRightClickContextMenu] =
-       settings_api::PrefType::kBoolean;
-   (*s_allowlist)[::prefs::kShowZoomIndicator] =
---- a/chrome/app/settings_strings.grdp
-+++ b/chrome/app/settings_strings.grdp
-@@ -287,6 +287,9 @@
-     </message>
-     <message name="IDS_SETTINGS_VISUAL_TAB_SWITCHER_LIST" desc="Toggle for list mode in the visual tab switcher.">
-       Show visual tab switcher as a list
-+    </message>
-+    <message name="IDS_SETTINGS_USE_LUMNO_NEW_TAB" desc="Toggle for using the bundled lumno extension as the new tab page.">
-+      Use lumno as the new tab page
-     </message>
-     <message name="IDS_SETTINGS_CYCLE_TABS_IN_MRU_ORDER" desc="Label for the checkbox which enables or disables cycling through tabs in MRU order when using Ctrl+Tab.">
-       Cycle through tabs in most recently used order with Ctrl+Tab
 --- a/chrome/app/generated_resources.grd
 +++ b/chrome/app/generated_resources.grd
 @@ -13767,8 +13767,8 @@
@@ -360,33 +223,9 @@
          </message>
  
          <!-- Extension blocklist state -->
---- a/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.html
-+++ b/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.html
-@@ -23,6 +23,11 @@
-       pref-key="helium.browser.visual_tab_switcher_list"
-       disabled="[[!visualTabSwitcherEnabled_]]"
-       label="$i18n{visualTabSwitcherList}">
-+  </settings-toggle-button>
-+
-+  <settings-toggle-button class="hr" id="useLumnoNewTab"
-+      pref-key="helium.browser.use_lumno_new_tab"
-+      label="$i18n{useLumnoNewTab}">
-   </settings-toggle-button>
- 
-   <settings-toggle-button class="hr" id="shiftRightClickContextMenu"
---- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-+++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -615,6 +615,7 @@
-       {"cycleTabsInMRUOrder", IDS_SETTINGS_CYCLE_TABS_IN_MRU_ORDER},
-       {"visualTabSwitcher", IDS_SETTINGS_VISUAL_TAB_SWITCHER},
-       {"visualTabSwitcherList", IDS_SETTINGS_VISUAL_TAB_SWITCHER_LIST},
-+      {"useLumnoNewTab", IDS_SETTINGS_USE_LUMNO_NEW_TAB},
-       {"roundedFrame", IDS_SETTINGS_ROUNDED_FRAME},
-       {"roundedFrameThickness", IDS_SETTINGS_ROUNDED_FRAME_THICKNESS},
-       {"roundedFrameThicknessNone", IDS_SETTINGS_ROUNDED_FRAME_THICKNESS_NONE},
 --- a/tools/gritsettings/resource_ids.spec
 +++ b/tools/gritsettings/resource_ids.spec
-@@ -244,6 +244,14 @@
+@@ -244,6 +244,10 @@
      "META": {"sizes": {"includes": [1000],}},
      "includes": [2860],
    },
@@ -394,16 +233,12 @@
 +    "META": {"sizes": {"includes": [50],}},
 +    "includes": [2862],
 +  },
-+  "<(SHARED_INTERMEDIATE_DIR)/third_party/xelium_extensions/lumno_resources.grd": {
-+    "META": {"sizes": {"includes": [400],}},
-+    "includes": [2864],
-+  },
    "<(SHARED_INTERMEDIATE_DIR)/chrome/browser/resources/bluetooth_internals/resources.grd": {
      "META": {"sizes": {"includes": [50],}},
      "includes": [2880],
 --- /dev/null
 +++ b/third_party/xelium_extensions/BUILD.gn
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,78 @@
 +# Copyright 2026 The Xelium Authors
 +# You can use, redistribute, and/or modify this source code under the
 +# terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -467,20 +302,6 @@
 +
 +    deps = [ ":${_prefix}_grd" ]
 +  }
-+}
-+
-+xelium_extension_resources("lumno") {
-+  source_dir = "//third_party/lumno"
-+
-+  # The manifest is rewritten by a patch, keep it as a build input so the pak
-+  # is regenerated when that happens.
-+  watched_files = [ "//third_party/lumno/manifest.json" ]
-+
-+  excludes = [
-+    "LICENSE",
-+    "README.chromium",
-+    "THIRD_PARTY_NOTICES.md",
-+  ]
 +}
 +
 +xelium_extension_resources("diapeek") {
@@ -615,26 +436,6 @@
 +if __name__ == '__main__':
 +    sys.exit(main(sys.argv[1:]))
 --- /dev/null
-+++ b/third_party/lumno/README.chromium
-@@ -0,0 +1,17 @@
-+Name: lumno
-+Short Name: lumno
-+URL: https://github.com/kubai087/lumno-extension
-+Version: 1.2.0
-+License: GPL-3.0
-+License File: LICENSE
-+Shipped: yes
-+Security Critical: no
-+
-+Description:
-+lumno is a keyboard-first command bar and quick search extension for Chromium.
-+
-+Local Modifications:
-+Pinned public key added to manifest.json. Command+T and Command+L are bound to
-+the command bar commands, the extension's own tab switcher commands are removed
-+in favour of Xelium's built-in tab switcher, and the new tab page override is
-+only honoured when the user opts in from Settings > Appearance.
---- /dev/null
 +++ b/third_party/diapeek/README.chromium
 @@ -0,0 +1,15 @@
 +Name: DiaPeek
@@ -652,53 +453,6 @@
 +Local Modifications:
 +Pinned public key added to manifest.json. Built from PR #1
 +(249498d14fa9abf5568484005ba7c4ce7b6eca78) instead of the upstream release.
---- a/third_party/lumno/manifest.json
-+++ b/third_party/lumno/manifest.json
-@@ -10,15 +10,15 @@
-     "show-search": {
-       "description": "__MSG_command_show_search__",
-       "suggested_key": {
--        "default": "Ctrl+Shift+K",
--        "mac": "Command+Shift+K"
-+        "default": "Ctrl+T",
-+        "mac": "Command+T"
-       }
-     },
-     "show-search-prefill": {
-       "description": "__MSG_command_show_search_prefill__",
-       "suggested_key": {
--        "default": "Ctrl+Shift+L",
--        "mac": "Command+Shift+L"
-+        "default": "Ctrl+L",
-+        "mac": "Command+L"
-       }
-     },
-     "show-search-prefill-v": {
-@@ -27,16 +27,6 @@
-         "default": "Ctrl+Shift+C",
-         "mac": "Command+Shift+C"
-       }
--    },
--    "show-tab-switcher": {
--      "description": "__MSG_command_show_tab_switcher__",
--      "suggested_key": {
--        "default": "Alt+Q",
--        "mac": "Alt+Q"
--      }
--    },
--    "show-tab-switcher-reverse": {
--      "description": "__MSG_command_show_tab_switcher_reverse__"
-     }
-   },
-   "content_scripts": [
-@@ -109,6 +99,7 @@
-     "48": "assets/images/lumno.png",
-     "128": "assets/images/lumno.png"
-   },
-+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmJgJOR2km3+rNsUhlgY9tFhX61lspn42+AIrnWVEOcV9RLdHRft+XbMQue7aXePyzPagcbtJeAjP6YOKPtj5toYUAzRDOoBs6KC/piQpkLV7cFaVGoJNBhQlFapn5OqBdU6DkFIEHoJGAFBpDoqYm5kFmFd8X8kXfSHt5gAyXxoANgFWptJAa6QfrXiCyDJfZSbQntoqqWKT/5+4vvqYyDm5DaC2TJO9VOnc5KUxjBz989KhpBejQ1LYILqUD450X9x+11l7jsLhcXkFJXgNIZ+WpzpDiQf5jGXLBbXoYF3A/nlYK/KXjZnLVHMYNNHaYwdIeimK3MctPKPLyNr82QIDAQAB",
-   "options_ui": {
-     "page": "src/options/options.html",
-     "open_in_tab": true
 --- a/third_party/diapeek/manifest.json
 +++ b/third_party/diapeek/manifest.json
 @@ -10,6 +10,7 @@

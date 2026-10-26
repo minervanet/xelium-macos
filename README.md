@@ -9,7 +9,7 @@
 </div>
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Xelium with the lumno command bar open" width="100%">
+  <img src="docs/screenshot.png" alt="Xelium with the native command bar open" width="100%">
 </p>
 
 ## Download
@@ -30,7 +30,7 @@ Mostly nothing of my own. Xelium is Helium plus a handful of open, unmerged pull
 
 I also added a few small patches of my own to make these pieces work together (see below).
 
-Two extensions are bundled and preinstalled: [lumno](https://github.com/kubai087/lumno-extension), which turns Command+T and Command+L into a command bar, and [DiaPeek](https://github.com/VanDerLars/DiaPeek), which opens links in a peek overlay. They are compiled into the app like Helium's built-in uBlock Origin, so they survive profile resets and never need a manual install.
+One extension is bundled and preinstalled: [DiaPeek](https://github.com/VanDerLars/DiaPeek), which opens links in a peek overlay. It is compiled into the app like Helium's built-in uBlock Origin, so it survives profile resets and never needs a manual install. The keyboard-first command bar (Command+T / Command+L) is a native Xelium feature, not an extension, so it also works on settings pages and the new tab page.
 
 ## Credits
 
@@ -43,10 +43,9 @@ Everything here belongs to the original authors.
   - [#2747](https://github.com/imputnet/helium/pull/2747): "comfortable" interface size (by [dumbmoron](https://github.com/dumbmoron))
   - [#2367](https://github.com/imputnet/helium/pull/2367): show address bar in sidebar (by [heloess](https://github.com/heloess))
 - Bundled extensions, preinstalled with the browser:
-  - [lumno](https://github.com/kubai087/lumno-extension) 1.2.0, a keyboard-first command bar (by [kubai087](https://github.com/kubai087), GPL-3.0)
   - [DiaPeek](https://github.com/VanDerLars/DiaPeek) (by [Lars Lehmann / VanDerLars](https://github.com/VanDerLars), MIT), built from [PR #1](https://github.com/VanDerLars/DiaPeek/pull/1) by [ikoshura](https://github.com/ikoshura)
   - [uBlock Origin](https://github.com/gorhill/uBlock) (by Raymond Hill and contributors, GPL-3.0), which ships with Helium
-- My own patches: comfortable sizing for vertical tabs, configurable rounded-frame thickness, narrower sidebar with the address bar, compact toolbar for vertical tabs, native frame materials by default, capped pinned-tab rows, sidebar pin button, toolbar/top-bar split, app menu reveal, and default appearance settings. I also wrote the Xelium rebrand, the bundled-extension packaging, and the crash-reporting and report-on-GitHub changes.
+- My own patches: comfortable sizing for vertical tabs, configurable rounded-frame thickness, narrower sidebar with the address bar, compact toolbar for vertical tabs, native frame materials by default, capped pinned-tab rows, sidebar pin button, toolbar/top-bar split, app menu reveal, default appearance settings, and the native command bar. I also wrote the Xelium rebrand, the bundled-extension packaging, and the crash-reporting and report-on-GitHub changes.
 
 ## Updates
 

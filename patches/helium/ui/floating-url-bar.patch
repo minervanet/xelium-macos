@@ -9,36 +9,6 @@
  // Spell-check
  #define IDC_SPELLCHECK_SUGGESTION_0     41000
 
---- a/chrome/app/settings_strings.grdp
-+++ b/chrome/app/settings_strings.grdp
-@@ -368,6 +368,12 @@
-     </message>
-     <message name="IDS_SETTINGS_WORKSPACES_DESCRIPTION" desc="Description for the workspaces toggle in appearance settings.">
-       Keep several sets of tabs in one window and switch between them from the sidebar
-+    </message>
-+    <message name="IDS_SETTINGS_COMMAND_BAR" desc="Label for the toggle that enables the native command bar.">
-+      Command bar
-+    </message>
-+    <message name="IDS_SETTINGS_COMMAND_BAR_DESCRIPTION" desc="Description for the command bar toggle in appearance settings.">
-+      Open a floating command bar with Cmd+T / Cmd+L instead, anywhere including settings pages
-     </message>
-     <message name="IDS_SETTINGS_BROWSER_ZEN_MODE" desc="Label for the toggle that enables zen mode, hiding browser chrome until hover.">
-       Frameless mode
-
---- a/chrome/common/pref_names.h
-+++ b/chrome/common/pref_names.h
-@@ -698,6 +698,10 @@
- 
- // String pref with the id of the currently active workspace.
- inline constexpr char kHeliumWorkspacesActive[] = "helium.workspaces.active";
-+
-+// A boolean pref set to true if the native command bar is enabled. When on,
-+// Cmd+T / Cmd+L open the bar instead of their built-in actions.
-+inline constexpr char kHeliumCommandBarEnabled[] = "helium.command_bar.enabled";
- 
- // A boolean pref set to true if a Home button to open the Home pages should be
- // visible on the toolbar.
-
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
 @@ -20,6 +20,45 @@
@@ -180,20 +150,6 @@
                                           false);
    command_updater_->UpdateCommandEnabled(IDC_SET_BROWSER_AS_DEFAULT, true);
 
---- a/chrome/browser/ui/browser_ui_prefs.cc
-+++ b/chrome/browser/ui/browser_ui_prefs.cc
-@@ -163,6 +163,10 @@
-   registry->RegisterDictionaryPref(prefs::kHeliumWorkspacesMetadata);
-   registry->RegisterListPref(prefs::kHeliumWorkspacesOrder);
-   registry->RegisterStringPref(prefs::kHeliumWorkspacesActive, std::string());
-+
-+  // Native command bar (Settings > Appearance > Command bar), off by default.
-+  // With it on, Cmd+T / Cmd+L open the bar instead of new-tab / focus-bar.
-+  registry->RegisterBooleanPref(prefs::kHeliumCommandBarEnabled, false);
- 
-   // Xelium default: at most four pinned tabs per row.
-   registry->RegisterIntegerPref(prefs::kHeliumVerticalPinnedTabsPerRow, 4);
-
 --- a/chrome/browser/ui/accelerator_table.cc
 +++ b/chrome/browser/ui/accelerator_table.cc
 @@ -81,6 +81,8 @@
@@ -271,18 +227,6 @@
  
  ui::Accelerator AcceleratorForCloseWindow() {
 
---- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-+++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -646,6 +646,8 @@
-       {"showProgressBar", IDS_SETTINGS_SHOW_PROGRESS_BAR},
-       {"workspacesEnabled", IDS_SETTINGS_WORKSPACES},
-       {"workspacesEnabledDescription", IDS_SETTINGS_WORKSPACES_DESCRIPTION},
-+      {"commandBarEnabled", IDS_SETTINGS_COMMAND_BAR},
-+      {"commandBarEnabledDescription", IDS_SETTINGS_COMMAND_BAR_DESCRIPTION},
-       {"shiftRightClickContextMenu",
-        IDS_SETTINGS_SHIFT_RIGHT_CLICK_CONTEXT_MENU},
-       {"showZoomIndicator", IDS_SETTINGS_SHOW_ZOOM_INDICATOR},
-
 --- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
 +++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
 @@ -73,6 +73,11 @@
@@ -297,18 +241,6 @@
        pref-key="helium.browser.zen_mode"
        label="$i18n{browserZenMode}"
        sub-label="$i18n{browserZenModeDescription}">
-
---- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
-+++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -329,6 +329,8 @@
-   (*s_allowlist)[::prefs::kVisualTabSwitcherList] =
-       settings_api::PrefType::kBoolean;
-   (*s_allowlist)[::prefs::kHeliumWorkspacesEnabled] =
-+      settings_api::PrefType::kBoolean;
-+  (*s_allowlist)[::prefs::kHeliumCommandBarEnabled] =
-       settings_api::PrefType::kBoolean;
-   (*s_allowlist)[::prefs::kUseLumnoNewTab] =
-       settings_api::PrefType::kBoolean;
 
 --- a/chrome/browser/global_keyboard_shortcuts_mac.mm
 +++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
