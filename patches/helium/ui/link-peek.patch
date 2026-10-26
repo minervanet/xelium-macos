@@ -130,7 +130,11 @@
 
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
-@@ -19,3 +19,87 @@
+@@ -16,6 +16,91 @@
+   ]
+   deps = [
+     "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui:layout_constants",
      "//chrome/common:constants",
    ]
  }
@@ -945,7 +949,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_view.cc
-@@ -0,0 +1,260 @@
+@@ -0,0 +1,274 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -959,6 +963,7 @@
 +#include "base/functional/bind.h"
 +#include "chrome/app/vector_icons/vector_icons.h"
 +#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/layout_constants.h"
 +#include "components/vector_icons/vector_icons.h"
 +#include "content/public/browser/web_contents.h"
 +#include "ui/base/accelerators/accelerator.h"
@@ -987,10 +992,12 @@
 +// Comfortable reading column: 72% of the parent width capped at 1020px,
 +// full height minus small top/bottom margins. Clamped for tiny windows.
 +constexpr int kBubbleRadius = 16;
-+constexpr int kHeaderHeight = 40;
 +constexpr int kIconSize = 16;
-+constexpr int kActionButtonSize = 28;
 +constexpr int kVerticalMargin = 24;
++// Header matches the real toolbar: square action buttons sized by density
++// (28px standard, 34px comfortable) via GetLayoutConstant, header height =
++// buttons + the row's own vertical insets.
++constexpr int kHeaderVerticalInsets = 4;
 +
 +gfx::Size ComputePopupSize(const gfx::Rect& parent_bounds) {
 +  const int width = std::clamp(
@@ -1004,6 +1011,10 @@
 +                                 const std::u16string& tooltip,
 +                                 views::View* parent,
 +                                 base::RepeatingClosure pressed) {
++  // Square, density-matched to real toolbar buttons (28 standard / 34
++  // comfortable). The header BoxLayout cross-axis is centered below so
++  // nothing stretches these tall.
++  const int size = GetLayoutConstant(LayoutConstant::kToolbarButtonHeight);
 +  auto* button = parent->AddChildView(
 +      std::make_unique<views::ImageButton>(std::move(pressed)));
 +  button->SetImageModel(
@@ -1016,7 +1027,7 @@
 +      views::Button::STATE_PRESSED,
 +      ui::ImageModel::FromVectorIcon(icon, ui::kColorIconHovered, kIconSize));
 +  button->SetTooltipText(tooltip);
-+  button->SetPreferredSize(gfx::Size(kActionButtonSize, kActionButtonSize));
++  button->SetPreferredSize(gfx::Size(size, size));
 +  button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
 +  button->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
 +  // Rounded gray hover/press background like toolbar items — not a circle.
@@ -1106,9 +1117,16 @@
 +  auto* header = contents->AddChildView(std::make_unique<views::View>());
 +  auto* header_layout = header->SetLayoutManager(
 +      std::make_unique<views::BoxLayout>(
-+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(0, 4),
-+          8));
-+  header->SetPreferredSize(gfx::Size(popup_size.width(), kHeaderHeight));
++          views::BoxLayout::Orientation::kHorizontal,
++          gfx::Insets::VH(0, kHeaderVerticalInsets), 8));
++  // Center on the cross axis: the default kStretch was elongating the
++  // square buttons to full header height (the tall hover rectangles).
++  header_layout->set_cross_axis_alignment(
++      views::BoxLayout::CrossAxisAlignment::kCenter);
++  const int header_height =
++      GetLayoutConstant(LayoutConstant::kToolbarButtonHeight) +
++      2 * kHeaderVerticalInsets;
++  header->SetPreferredSize(gfx::Size(popup_size.width(), header_height));
 +  icon_ = header->AddChildView(std::make_unique<views::ImageView>());
 +  icon_->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
 +  icon_->SetImageSize(gfx::Size(kIconSize, kIconSize));
