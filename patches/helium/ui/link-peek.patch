@@ -904,7 +904,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_view.cc
-@@ -0,0 +1,237 @@
+@@ -0,0 +1,250 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -942,19 +942,20 @@
 +
 +namespace {
 +
-+// The bubble covers most of the content area: 62% of the parent width and
-+// 72% of its height, clamped so it stays usable on small windows and never
-+// overwhelms large ones.
++// Near-full overlay like DiaPeek: 32px side margins, 24px top/bottom,
++// clamped so tiny windows stay usable.
 +constexpr int kBubbleRadius = 16;
 +constexpr int kHeaderHeight = 40;
 +constexpr int kIconSize = 16;
 +constexpr int kActionButtonSize = 28;
++constexpr int kSideMargin = 32;
++constexpr int kVerticalMargin = 24;
 +
 +gfx::Size ComputePopupSize(const gfx::Rect& parent_bounds) {
-+  const int width = std::clamp(
-+      static_cast<int>(parent_bounds.width() * 0.62), 880, 1080);
-+  const int height = std::clamp(
-+      static_cast<int>(parent_bounds.height() * 0.72), 620, 800);
++  const int width =
++      std::max(parent_bounds.width() - 2 * kSideMargin, 800);
++  const int height =
++      std::max(parent_bounds.height() - 2 * kVerticalMargin, 560);
 +  return gfx::Size(width, height);
 +}
 +
@@ -967,6 +968,12 @@
 +  button->SetImageModel(
 +      views::Button::STATE_NORMAL,
 +      ui::ImageModel::FromVectorIcon(icon, ui::kColorMenuIcon, kIconSize));
++  button->SetImageModel(
++      views::Button::STATE_HOVERED,
++      ui::ImageModel::FromVectorIcon(icon, ui::kColorIconHovered, kIconSize));
++  button->SetImageModel(
++      views::Button::STATE_PRESSED,
++      ui::ImageModel::FromVectorIcon(icon, ui::kColorIconHovered, kIconSize));
 +  button->SetTooltipText(tooltip);
 +  button->SetPreferredSize(gfx::Size(kActionButtonSize, kActionButtonSize));
 +  button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
@@ -1006,13 +1013,17 @@
 +
 +  widget->SetBounds(gfx::Rect(
 +      parent_bounds.x() + (parent_bounds.width() - popup_size.width()) / 2,
-+      parent_bounds.y() + parent_bounds.height() / 8, popup_size.width(),
-+      popup_size.height()));
++      parent_bounds.y() + (parent_bounds.height() - popup_size.height()) / 2,
++      popup_size.width(), popup_size.height()));
 +  widget->Show();
 +  widget->AddObserver(view);
 +  widget->GetFocusManager()->RegisterAccelerator(
 +      ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE),
 +      ui::AcceleratorManager::kNormalPriority, view);
++  // views::WebView never drives WebContents visibility itself; without this
++  // the preview stays hidden (renderer throttled, black bubble) even though
++  // navigation commits. The tab strip takes over on adopt.
++  preview->WasShown();
 +  view->web_view_->RequestFocus();
 +  return view;
 +}
@@ -1032,16 +1043,19 @@
 +      on_copy_link_(std::move(on_copy_link)) {
 +  SetModalType(ui::mojom::ModalType::kNone);
 +  auto contents = std::make_unique<views::View>();
-+  contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
-+      views::BoxLayout::Orientation::kVertical, gfx::Insets(8), 4));
++  auto* contents_layout = contents->SetLayoutManager(
++      std::make_unique<views::BoxLayout>(
++          views::BoxLayout::Orientation::kVertical, gfx::Insets(8), 4));
 +  contents->SetBackground(views::CreateRoundedRectBackground(
 +      ui::kColorBubbleBackground, kBubbleRadius));
 +  contents->SetBorder(views::CreateRoundedRectBorder(
 +      1, kBubbleRadius, ui::kColorBubbleBorder));
 +
 +  auto* header = contents->AddChildView(std::make_unique<views::View>());
-+  header->SetLayoutManager(std::make_unique<views::BoxLayout>(
-+      views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(0, 4), 8));
++  auto* header_layout = header->SetLayoutManager(
++      std::make_unique<views::BoxLayout>(
++          views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(0, 4),
++          8));
 +  header->SetPreferredSize(gfx::Size(popup_size.width(), kHeaderHeight));
 +  icon_ = header->AddChildView(std::make_unique<views::ImageView>());
 +  icon_->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
@@ -1052,10 +1066,10 @@
 +  title_ = header->AddChildView(std::make_unique<views::Label>());
 +  title_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 +  title_->SetElideBehavior(gfx::ELIDE_TAIL);
-+  title_->SetProperty(
-+      views::kFlexBehaviorKey,
-+      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
-+                               views::MaximumFlexSizeRule::kUnbounded));
++  // Weight 1: the title absorbs all excess header width so the action
++  // buttons sit flush at the right end. (BoxLayout weights, not the
++  // FlexLayout property: kFlexBehaviorKey is silently ignored here.)
++  header_layout->SetFlexForView(title_, 1);
 +  ActionButton(kOpenInNewIcon, u"Open in new tab", header,
 +               base::BindRepeating(
 +                   [](HeliumLinkPeekView* view) {
@@ -1077,11 +1091,9 @@
 +
 +  auto web_view = std::make_unique<views::WebView>(profile);
 +  web_view->SetWebContents(preview);
-+  // No fixed height: flex fills whatever the fixed-size popup leaves over.
-+  web_view->SetProperty(
-+      views::kFlexBehaviorKey,
-+      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
-+                               views::MaximumFlexSizeRule::kUnbounded));
++  // Weight 1 so the preview fills everything below the header. Same
++  // BoxLayout-weights note as above: kFlexBehaviorKey would be ignored.
++  contents_layout->SetFlexForView(web_view.get(), 1);
 +  web_view_ = web_view.get();
 +  contents->AddChildView(std::move(web_view));
 +  SetContentsView(std::move(contents));
@@ -1101,6 +1113,7 @@
 +
 +void HeliumLinkPeekView::DetachPreview() {
 +  if (web_view_ && web_view_->GetWebContents()) {
++    web_view_->GetWebContents()->WasHidden();
 +    web_view_->SetWebContents(nullptr);
 +  }
 +}
