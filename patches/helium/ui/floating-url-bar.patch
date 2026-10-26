@@ -1654,7 +1654,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.h
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,103 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1679,6 +1679,7 @@
 +}  // namespace gfx
 +
 +namespace views {
++class BoxLayout;
 +class Label;
 +class Textfield;
 +class View;
@@ -1742,6 +1743,7 @@
 +  void SetSelected(size_t index);
 +  void UpdateRowHighlight();
 +  void ResizeToContents();
++  void UpdateBottomInset();
 +
 +  base::OnceClosure on_closed_;
 +  base::RepeatingCallback<void(const std::u16string&)> on_query_;
@@ -1750,6 +1752,7 @@
 +  raw_ptr<views::Textfield> input_ = nullptr;
 +  raw_ptr<views::View> results_ = nullptr;
 +  raw_ptr<views::Label> scope_bar_ = nullptr;
++  raw_ptr<views::BoxLayout> contents_layout_ = nullptr;
 +  std::optional<size_t> scope_hint_;
 +  size_t selected_ = 0;
 +};
@@ -1758,7 +1761,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,437 @@
+@@ -0,0 +1,458 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -2003,10 +2006,13 @@
 +  SetModalType(ui::mojom::ModalType::kNone);
 +  auto contents = std::make_unique<views::View>();
 +  // Bottom inset compensates the main-axis gap below the input, so the empty
-+  // state (input only) has visually balanced top/bottom margins.
-+  contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
-+      views::BoxLayout::Orientation::kVertical, gfx::Insets::TLBR(8, 8, 4, 8),
-+      4));
++  // state (input only) has visually balanced top/bottom margins. It is
++  // widened to match once rows show (see UpdateBottomInset).
++  auto* contents_layout = static_cast<views::BoxLayout*>(
++      contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
++          views::BoxLayout::Orientation::kVertical,
++          gfx::Insets::TLBR(8, 8, 4, 8), 4)));
++  contents_layout_ = contents_layout;
 +  // Opaque bubble so page content never bleeds through the results.
 +  contents->SetBackground(views::CreateRoundedRectBackground(
 +      ui::kColorBubbleBackground, kBubbleRadius));
@@ -2076,11 +2082,29 @@
 +  if (!GetWidget()) {
 +    return;
 +  }
++  UpdateBottomInset();
 +  // Resizing the popup every keystroke flashes the whole bubble. Only
 +  // resize when the height actually changed.
 +  const int height = GetContentsView()->GetPreferredSize().height();
 +  if (GetWidget()->GetWindowBoundsInScreen().height() != height) {
 +    GetWidget()->SetSize(gfx::Size(kBarWidth, height));
++  }
++}
++
++void HeliumCommandBarView::UpdateBottomInset() {
++  if (!contents_layout_) {
++    return;
++  }
++  // Empty bar: keep the tight bottom that balances the input gap. With rows
++  // (or the scope bar) showing, match the 8px used everywhere else.
++  const bool bare =
++      results_->children().empty() && !scope_bar_->GetVisible();
++  const int bottom = bare ? 4 : 8;
++  const gfx::Insets insets = contents_layout_->inside_border_insets();
++  if (insets.bottom() != bottom) {
++    contents_layout_->set_inside_border_insets(
++        gfx::Insets::TLBR(insets.top(), insets.left(), bottom,
++                          insets.right()));
 +  }
 +}
 +
