@@ -365,7 +365,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.h
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,167 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -450,11 +450,10 @@
 +  // Rebuilds results for |query|: tabs, bookmarks and commands synchronously,
 +  // history asynchronously. Called by the view on every keystroke.
 +  void OnQueryChanged(const std::u16string& query);
-+  // Opens or switches to items_[index], then closes the bar. |enter_key| is
-+  // true only for the Return key: on an unentered scope hint it opens an
-+  // exact-URL query directly instead of scoping. Clicks and Tab always
-+  // enter the scope explicitly.
-+  void ActivateItem(size_t index, bool enter_key);
++  // Activates items_[index] (opens, switches, searches or copies), then
++  // closes the bar. Does exactly what the selected row advertises; Tab
++  // enters scopes explicitly via EnterScope instead.
++  void ActivateItem(size_t index);
 +  // Tab key: enters the hinted scope, or completes the input with the
 +  // selected row's URL.
 +  void OnTabPressed();
@@ -479,6 +478,9 @@
 +  void OnWidgetClosed() {
 +    widget_ = nullptr;
 +    view_ = nullptr;
++    // Same per-invocation rule as Hide(): a focus-loss close must not leak
++    // the scope into the next opening either.
++    scope_keyword_.clear();
 +  }
 +  // Builds the result list for |query| from the synchronous sources plus
 +  // |history_rows| when present. Honors the active scope.
@@ -492,6 +494,9 @@
 +                        history::QueryResults results);
 +  void PushItems(std::vector<HeliumCommandBarItem> items);
 +  void FetchFavicons();
++  // Enters the keyword scope: clears the input so the scoped query is
++  // typed fresh. The bar stays open.
++  void EnterScope(const std::string& keyword);
 +  // NTP-aware navigation shared by all open paths.
 +  void OpenUrl(const GURL& url);
 +  void OnFavicon(int seq, size_t index, const std::string& url_spec,
@@ -531,7 +536,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,568 @@
+@@ -0,0 +1,593 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -660,6 +665,8 @@
 +  if (!widget_) {
 +    return;
 +  }
++  // Scope is per-invocation: never leak it into the next opening.
++  scope_keyword_.clear();
 +  // Null first: closing runs WindowClosing synchronously, which would
 +  // otherwise re-enter and double-close.
 +  views::Widget* widget = widget_;
@@ -843,11 +850,27 @@
 +  if (!view_) {
 +    return;
 +  }
-+  if (scope_hint_index_.has_value()) {
-+    ActivateItem(*scope_hint_index_, /*enter_key=*/false);
++  if (scope_hint_index_.has_value() &&
++      *scope_hint_index_ < items_.size()) {
++    // Tab always enters the scope explicitly — the standard browser
++    // behavior. Range-checked: the hint index belongs to the current list.
++    EnterScope(items_[*scope_hint_index_].site_keyword);
 +    return;
 +  }
 +  view_->CompleteSelection();
++}
++
++void HeliumCommandBarController::EnterScope(const std::string& keyword) {
++  if (keyword.empty()) {
++    return;
++  }
++  scope_keyword_ = keyword;
++  // Clear the keyword so the scoped query is typed fresh. SetInputText
++  // fires ContentsChanged, which re-queries from "" and shows the badge
++  // via PushItems. The bar stays open.
++  if (view_) {
++    view_->SetInputText(std::u16string());
++  }
 +}
 +
 +void HeliumCommandBarController::OnEscapePressed() {
@@ -995,7 +1018,7 @@
 +  view_->SetItemImage(index, result.image);
 +}
 +
-+void HeliumCommandBarController::ActivateItem(size_t index, bool enter_key) {
++void HeliumCommandBarController::ActivateItem(size_t index) {
 +  if (index >= items_.size()) {
 +    return;
 +  }
@@ -1014,35 +1037,42 @@
 +    case HeliumCommandBarItem::Type::kTab:
 +      break;  // Handled above.
 +    case HeliumCommandBarItem::Type::kSiteSearch: {
-+      // First activation enters the scope; inside the scope it navigates.
++      // Activation does what the row advertises. With search terms it
++      // performs the site search; with a bare keyword it enters the scope
++      // (Tab and clicks land here too). The exact-URL row below covers
++      // opening, so scoping here is never a trap.
 +      const bool already_in_scope =
 +          !scope_keyword_.empty() && scope_keyword_ == item.site_keyword;
 +      if (!already_in_scope && !item.site_keyword.empty()) {
-+        // Enter on an exact URL opens it instead of scoping: typing
-+        // "youtube.com" should go there, not trap the user in a scope.
-+        // Clicks and Tab always enter the scope explicitly.
-+        if (enter_key) {
-+          if (auto direct = helium_command_bar_model::UrlOrSearchForQuery(
-+                  browser_->GetProfile(), last_query_);
-+              direct && direct->type == HeliumCommandBarItem::Type::kUrl) {
-+            OpenUrl(direct->url);
-+            HideSoon();
-+            return;
-+          }
++        std::u16string remainder;
++        if (auto split = helium_command_bar_model::SplitKeyword(last_query_,
++                                                                false);
++            split && split->keyword == item.site_keyword) {
++          remainder = split->remainder;
 +        }
-+        scope_keyword_ = item.site_keyword;
-+        // Clear the keyword so the user types the scoped query fresh.
-+        // SetInputText fires ContentsChanged, which re-queries from "" and
-+        // shows the scope bar via PushItems.
-+        if (view_) {
-+          view_->SetInputText(std::u16string());
++        if (remainder.empty()) {
++          EnterScope(item.site_keyword);
++          return;
 +        }
-+        return;
++        if (auto search_url = helium_command_bar_model::BuildSiteSearchUrl(
++                TemplateURLServiceFactory::GetForProfile(
++                    browser_->GetProfile()),
++                item.site_keyword, remainder)) {
++          url = *search_url;
++        } else {
++          EnterScope(item.site_keyword);
++          return;
++        }
++        break;
 +      }
 +      if (auto search_url = helium_command_bar_model::BuildSiteSearchUrl(
 +              TemplateURLServiceFactory::GetForProfile(browser_->GetProfile()),
 +              item.site_keyword, ScopeRemainder(last_query_))) {
 +        url = *search_url;
++      } else {
++        // Nothing to search (empty terms): stay open instead of closing
++        // over a no-op.
++        return;
 +      }
 +      break;
 +    }
@@ -1620,7 +1650,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.h
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,106 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1659,15 +1689,14 @@
 + public:
 +  // Creates, focuses and shows the popup parented to |parent|. |on_closed|
 +  // runs when the widget begins closing, |on_query| on every keystroke,
-+  // |on_activate| with the chosen result index (plus whether Return was the
-+  // trigger, as opposed to a click). Returns the owning view
++  // |on_activate| with the chosen result index. Returns the owning view
 +  // (owned by the widget, deleted on close).
 +  static HeliumCommandBarView* Show(
 +      gfx::NativeView parent,
 +      const std::u16string& initial_query,
 +      base::OnceClosure on_closed,
 +      base::RepeatingCallback<void(const std::u16string&)> on_query,
-+      base::RepeatingCallback<void(size_t, bool)> on_activate,
++      base::RepeatingCallback<void(size_t)> on_activate,
 +      base::RepeatingClosure on_tab,
 +      base::RepeatingClosure on_escape);
 +
@@ -1703,7 +1732,7 @@
 +                       base::OnceClosure on_closed,
 +                       base::RepeatingCallback<void(const std::u16string&)>
 +                           on_query,
-+                       base::RepeatingCallback<void(size_t, bool)> on_activate,
++                       base::RepeatingCallback<void(size_t)> on_activate,
 +                       base::RepeatingClosure on_tab,
 +                       base::RepeatingClosure on_escape);
 +
@@ -1716,7 +1745,7 @@
 +
 +  base::OnceClosure on_closed_;
 +  base::RepeatingCallback<void(const std::u16string&)> on_query_;
-+  base::RepeatingCallback<void(size_t, bool)> on_activate_;
++  base::RepeatingCallback<void(size_t)> on_activate_;
 +  base::RepeatingClosure on_tab_;
 +  base::RepeatingClosure on_escape_;
 +  raw_ptr<views::Textfield> input_ = nullptr;
@@ -1930,7 +1959,7 @@
 +    const std::u16string& initial_query,
 +    base::OnceClosure on_closed,
 +    base::RepeatingCallback<void(const std::u16string&)> on_query,
-+    base::RepeatingCallback<void(size_t, bool)> on_activate,
++    base::RepeatingCallback<void(size_t)> on_activate,
 +    base::RepeatingClosure on_tab,
 +    base::RepeatingClosure on_escape) {
 +  auto delegate = std::unique_ptr<HeliumCommandBarView>(new HeliumCommandBarView(
@@ -1966,7 +1995,7 @@
 +    const std::u16string& initial_query,
 +    base::OnceClosure on_closed,
 +    base::RepeatingCallback<void(const std::u16string&)> on_query,
-+    base::RepeatingCallback<void(size_t, bool)> on_activate,
++    base::RepeatingCallback<void(size_t)> on_activate,
 +    base::RepeatingClosure on_tab,
 +    base::RepeatingClosure on_escape)
 +    : on_closed_(std::move(on_closed)),
@@ -2033,7 +2062,7 @@
 +        items[i],
 +        base::BindRepeating(
 +            [](HeliumCommandBarView* view, size_t index) {
-+              view->on_activate_.Run(index, /*enter_key=*/false);
++              view->on_activate_.Run(index);
 +            },
 +            base::Unretained(this), i),
 +        base::BindRepeating(
@@ -2162,7 +2191,7 @@
 +      return false;
 +    case ui::VKEY_RETURN:
 +      if (!results_->children().empty()) {
-+        on_activate_.Run(selected_, /*enter_key=*/true);
++        on_activate_.Run(selected_);
 +      }
 +      return true;
 +    default:
