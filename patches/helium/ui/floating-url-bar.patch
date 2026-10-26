@@ -526,12 +526,14 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,533 @@
+@@ -0,0 +1,565 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
 +
 +#include "chrome/browser/ui/helium/helium_command_bar_controller.h"
++
++#include <cstdio>
 +
 +#include "base/functional/bind.h"
 +#include "base/strings/utf_string_conversions.h"
@@ -562,6 +564,26 @@
 +#include "ui/views/widget/widget.h"
 +
 +DEFINE_USER_DATA(HeliumCommandBarController);
++
++namespace {
++
++// TEMPORARY crash hunt (youtube.com keystroke kills the browser): append-only
++// file log, flushed per event so the tail survives the crash. Remove once
++// the faulting input is identified.
++void CmdBarTrace(const std::string& line) {
++  if (FILE* f = fopen("/tmp/cmdbar.log", "a")) {
++    fprintf(f, "%s\n", line.c_str());
++    fclose(f);
++  }
++}
++
++std::string ItemSig(const HeliumCommandBarItem& item) {
++  return std::to_string(static_cast<int>(item.type)) + ":" +
++         std::to_string(item.title.size()) + ":" +
++         std::to_string(item.url_spec.size());
++}
++
++}  // namespace
 +
 +namespace {
 +
@@ -728,6 +750,7 @@
 +
 +void HeliumCommandBarController::OnQueryChanged(const std::u16string& query) {
 +  last_query_ = query;
++  CmdBarTrace("query len=" + std::to_string(query.size()));
 +  if (query.empty()) {
 +    last_history_rows_ = history::QueryResults();
 +  }
@@ -767,12 +790,19 @@
 +    return;
 +  }
 +  last_history_rows_ = std::move(results);
++  CmdBarTrace("hist rows=" + std::to_string(last_history_rows_.size()));
 +  PushItems(CollectResults(query, &last_history_rows_));
 +}
 +
 +void HeliumCommandBarController::PushItems(
 +    std::vector<HeliumCommandBarItem> items) {
 +  const bool same = SameItems(items_, items);
++  std::string sig = "push n=" + std::to_string(items.size()) +
++                    " same=" + (same ? "1" : "0") + " [";
++  for (const auto& it : items) {
++    sig += ItemSig(it) + " ";
++  }
++  CmdBarTrace(sig + "]");
 +  items_ = std::move(items);
 +  if (!same) {
 +    // Bumped only on real change: in-flight favicon callbacks carry the
@@ -805,6 +835,7 @@
 +}
 +
 +void HeliumCommandBarController::FetchFavicons() {
++  CmdBarTrace("favicons for n=" + std::to_string(items_.size()));
 +  favicon::FaviconService* favicons = FaviconServiceFactory::GetForProfile(
 +      browser_->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
 +  if (!favicons) {
@@ -973,6 +1004,7 @@
 +}
 +
 +void HeliumCommandBarController::ActivateItem(size_t index) {
++  CmdBarTrace("activate i=" + std::to_string(index));
 +  if (index >= items_.size()) {
 +    return;
 +  }
@@ -1690,13 +1722,14 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,441 @@
+@@ -0,0 +1,450 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
 +
 +#include "chrome/browser/ui/helium/helium_command_bar_view.h"
 +
++#include <cstdio>
 +#include <utility>
 +
 +#include "base/functional/bind.h"
@@ -1981,6 +2014,14 @@
 +  scope_hint_ = scope_hint;
 +  results_->RemoveAllChildViews();
 +  selected_ = 0;
++  {
++    // TEMPORARY crash hunt: see comment in the controller.
++    FILE* f = fopen("/tmp/cmdbar.log", "a");
++    if (f) {
++      fprintf(f, "setresults n=%zu\n", items.size());
++      fclose(f);
++    }
++  }
 +  for (size_t i = 0; i < items.size(); ++i) {
 +    auto row = std::make_unique<ResultRowView>(
 +        items[i],
