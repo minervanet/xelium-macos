@@ -1796,14 +1796,13 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,460 @@
+@@ -0,0 +1,456 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
 +
 +#include "chrome/browser/ui/helium/helium_command_bar_view.h"
 +
-+#include <cstdio>
 +#include <utility>
 +
 +#include "base/functional/bind.h"
@@ -2215,14 +2214,11 @@
 +      MoveSelection(1);
 +      return true;
 +    case ui::VKEY_TAB: {
-+      // TEMPORARY: prove Tab reaches the bar at all (user reports it never
-+      // scopes). Remove with the auto-scope evaluation.
-+      if (FILE* f = fopen("/tmp/cmdbar.log", "a")) {
-+        fprintf(f, "tab key, querylen=%zu\n", sender->GetText().size());
-+        fclose(f);
-+      }
-+      // Tab enters the hinted scope, or completes the input with the
-+      // selected row's URL. Never moves focus out of the bar.
++      // NOTE: on macOS this case effectively never fires — AppKit consumes
++      // Tab for key-view traversal before views dispatch, which is also why
++      // a Tab press selects all text instead of scoping. Scope via Space
++      // (standard) or the hint row; this path stays for platforms where Tab
++      // arrives normally. Proven by /tmp/cmdbar.log probe, since removed.
 +      on_tab_.Run();
 +      return true;
 +    }
