@@ -9,9 +9,39 @@
  // Spell-check
  #define IDC_SPELLCHECK_SUGGESTION_0     41000
 
+--- a/chrome/app/settings_strings.grdp
++++ b/chrome/app/settings_strings.grdp
+@@ -365,6 +365,12 @@
+     </message>
+     <message name="IDS_SETTINGS_WORKSPACES_DESCRIPTION" desc="Description for the workspaces toggle in appearance settings.">
+       Keep several sets of tabs in one window and switch between them from the sidebar
++    </message>
++    <message name="IDS_SETTINGS_COMMAND_BAR" desc="Label for the toggle that enables the native command bar.">
++      Command bar
++    </message>
++    <message name="IDS_SETTINGS_COMMAND_BAR_DESCRIPTION" desc="Description for the command bar toggle in appearance settings.">
++      Open a floating command bar with Cmd+T / Cmd+L instead, anywhere including settings pages
+     </message>
+     <message name="IDS_SETTINGS_BROWSER_ZEN_MODE" desc="Label for the toggle that enables zen mode, hiding browser chrome until hover.">
+       Frameless mode
+
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -693,6 +693,10 @@
+ 
+ // String pref with the id of the currently active workspace.
+ inline constexpr char kHeliumWorkspacesActive[] = "helium.workspaces.active";
++
++// A boolean pref set to true if the native command bar is enabled. When on,
++// Cmd+T / Cmd+L open the bar instead of their built-in actions.
++inline constexpr char kHeliumCommandBarEnabled[] = "helium.command_bar.enabled";
+ 
+ // A boolean pref set to true if a Home button to open the Home pages should be
+ // visible on the toolbar.
+
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
-@@ -20,6 +20,45 @@
+@@ -20,6 +20,46 @@
    ]
  }
  
@@ -44,6 +74,7 @@
 +    "//components/favicon_base",
 +    "//components/history/core/browser",
 +    "//components/keyed_service/core",
++    "//components/prefs",
 +    "//components/search_engines",
 +    "//content/public/browser",
 +    "//ui/base",
@@ -89,17 +120,27 @@
  #include "chrome/browser/ui/helium/helium_workspace_controller.h"
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
-@@ -657,6 +658,10 @@
+@@ -656,6 +657,10 @@
+     helium_workspace_controller_ =
          GetUserDataFactory().CreateInstance<HeliumWorkspaceController>(
              *browser, browser, profile->GetPrefs());
- 
++
 +    helium_command_bar_controller_ =
 +        GetUserDataFactory().CreateInstance<HeliumCommandBarController>(
 +            *browser, browser);
-+
+ 
      vertical_tab_strip_state_controller_ =
          GetUserDataFactory()
-             .CreateInstance<tabs::VerticalTabStripStateControllerImpl>(
+@@ -846,6 +851,9 @@
+         std::make_unique<ExtensionKeybindingRegistryViews>(
+             browser, extensions::ExtensionKeybindingRegistry::ALL_EXTENSIONS,
+             focus_manager);
++    if (helium_command_bar_controller_) {
++      helium_command_bar_controller_->RegisterAccelerators(focus_manager);
++    }
+   }
+ 
+   if (browser_view) {
 
 --- a/chrome/browser/ui/browser_window/internal/BUILD.gn
 +++ b/chrome/browser/ui/browser_window/internal/BUILD.gn
@@ -150,6 +191,20 @@
                                           false);
    command_updater_->UpdateCommandEnabled(IDC_SET_BROWSER_AS_DEFAULT, true);
 
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -158,6 +158,10 @@
+   registry->RegisterDictionaryPref(prefs::kHeliumWorkspacesMetadata);
+   registry->RegisterListPref(prefs::kHeliumWorkspacesOrder);
+   registry->RegisterStringPref(prefs::kHeliumWorkspacesActive, std::string());
++
++  // Native command bar (Settings > Appearance > Command bar), off by default.
++  // With it on, Cmd+T / Cmd+L open the bar instead of new-tab / focus-bar.
++  registry->RegisterBooleanPref(prefs::kHeliumCommandBarEnabled, false);
+ 
+   // Xelium default: at most four pinned tabs per row.
+   registry->RegisterIntegerPref(prefs::kHeliumVerticalPinnedTabsPerRow, 4);
+
 --- a/chrome/browser/ui/accelerator_table.cc
 +++ b/chrome/browser/ui/accelerator_table.cc
 @@ -81,6 +81,8 @@
@@ -161,58 +216,6 @@
      {ui::VKEY_O, ui::EF_PLATFORM_ACCELERATOR, IDC_OPEN_FILE},
      {ui::VKEY_P, ui::EF_PLATFORM_ACCELERATOR, IDC_PRINT},
      {ui::VKEY_R, ui::EF_PLATFORM_ACCELERATOR, IDC_RELOAD},
-
---- a/chrome/browser/ui/views/frame/browser_view.cc
-+++ b/chrome/browser/ui/views/frame/browser_view.cc
-@@ -34,6 +34,7 @@
- #include "base/scoped_observation.h"
- #include "base/strings/string_number_conversions.h"
- #include "base/strings/stringprintf.h"
-+#include "base/strings/utf_string_conversions.h"
- #include "base/task/sequenced_task_runner.h"
- #include "base/task/single_thread_task_runner.h"
- #include "base/trace_event/trace_event.h"
-@@ -108,6 +109,7 @@
- #include "chrome/browser/ui/global_error/global_error.h"
- #include "chrome/browser/ui/global_error/global_error_service.h"
- #include "chrome/browser/ui/global_error/global_error_service_factory.h"
-+#include "chrome/browser/ui/helium/helium_command_bar_controller.h"
- #include "chrome/browser/ui/layout_constants.h"
- #include "chrome/browser/ui/location_bar/location_bar.h"
- #include "chrome/browser/ui/navigator/browser_navigator.h"
-@@ -6332,6 +6334,32 @@
-   if (ExclusiveAccessManager::From(browser_)->HandleUserKeyEvent(
-           native_event)) {
-     return true;
-+  }
-+
-+  // Xelium native command bar: when enabled, Cmd+T / Cmd+L open the bar
-+  // instead of their built-in actions. This is the native equivalent of
-+  // Lumno's extension-command takeover, so it works on every page including
-+  // chrome:// pages and the new tab page. Menu items, toolbar buttons and
-+  // session restore still execute IDC_NEW_TAB / IDC_FOCUS_LOCATION normally.
-+  if ((accelerator.key_code() == ui::VKEY_T ||
-+       accelerator.key_code() == ui::VKEY_L) &&
-+      accelerator.modifiers() == ui::EF_PLATFORM_ACCELERATOR &&
-+      browser_->GetProfile()->GetPrefs()->GetBoolean(
-+          prefs::kHeliumCommandBarEnabled)) {
-+    if (HeliumCommandBarController* command_bar =
-+            HeliumCommandBarController::From(browser_.get())) {
-+      std::u16string initial;
-+      if (accelerator.key_code() == ui::VKEY_L) {
-+        if (TabStripModel* tab_strip = browser_->GetTabStripModel()) {
-+          if (content::WebContents* contents =
-+                  tab_strip->GetActiveWebContents()) {
-+            initial = base::UTF8ToUTF16(contents->GetVisibleURL().spec());
-+          }
-+        }
-+      }
-+      command_bar->Toggle(GetWidget()->GetNativeView(), initial);
-+      return true;
-+    }
-   }
- 
-   int command_id;
 
 --- a/chrome/browser/ui/cocoa/accelerators_cocoa.mm
 +++ b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
@@ -226,6 +229,18 @@
  };
  
  ui::Accelerator AcceleratorForCloseWindow() {
+
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -645,6 +645,8 @@
+       {"showProgressBar", IDS_SETTINGS_SHOW_PROGRESS_BAR},
+       {"workspacesEnabled", IDS_SETTINGS_WORKSPACES},
+       {"workspacesEnabledDescription", IDS_SETTINGS_WORKSPACES_DESCRIPTION},
++      {"commandBarEnabled", IDS_SETTINGS_COMMAND_BAR},
++      {"commandBarEnabledDescription", IDS_SETTINGS_COMMAND_BAR_DESCRIPTION},
+       {"shiftRightClickContextMenu",
+        IDS_SETTINGS_SHIFT_RIGHT_CLICK_CONTEXT_MENU},
+       {"showZoomIndicator", IDS_SETTINGS_SHOW_ZOOM_INDICATOR},
 
 --- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
 +++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
@@ -242,6 +257,18 @@
        label="$i18n{browserZenMode}"
        sub-label="$i18n{browserZenModeDescription}">
 
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -329,6 +329,8 @@
+   (*s_allowlist)[::prefs::kVisualTabSwitcherList] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumWorkspacesEnabled] =
++      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumCommandBarEnabled] =
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kShiftRightClickContextMenu] =
+       settings_api::PrefType::kBoolean;
+
 --- a/chrome/browser/global_keyboard_shortcuts_mac.mm
 +++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
 @@ -122,6 +122,7 @@
@@ -255,7 +282,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.h
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,123 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -275,6 +302,7 @@
 +#include "chrome/browser/ui/helium/helium_command_bar_model.h"
 +#include "components/favicon_base/favicon_types.h"
 +#include "components/history/core/browser/history_types.h"
++#include "ui/base/accelerators/accelerator.h"
 +#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 +#include "ui/gfx/image/image.h"
 +#include "ui/gfx/native_ui_types.h"
@@ -282,6 +310,7 @@
 +class BrowserWindowInterface;
 +
 +namespace views {
++class FocusManager;
 +class Widget;
 +}  // namespace views
 +
@@ -299,7 +328,15 @@
 +// HeliumCommandBarController::From(browser). The parent window is supplied by
 +// the command handler at toggle time, keeping this target free of the
 +// views/frame dependency.
-+class HeliumCommandBarController {
++//
++// Cmd+T / Cmd+L takeover: on macOS the main menu claims those equivalents
++// before Views accelerators are consulted, so a static-table entry would
++// never fire. Instead the controller registers itself as a high-priority
++// accelerator target on the window's FocusManager — the same path extension
++// commands use to outrank the menu — and consumes plain Cmd+T / Cmd+L only
++// while the pref is on. Menu clicks and other invocations still execute
++// IDC_NEW_TAB / IDC_FOCUS_LOCATION normally.
++class HeliumCommandBarController : public ui::AcceleratorTarget {
 + public:
 +  DECLARE_USER_DATA(HeliumCommandBarController);
 +
@@ -309,7 +346,11 @@
 +  HeliumCommandBarController(const HeliumCommandBarController&) = delete;
 +  HeliumCommandBarController& operator=(const HeliumCommandBarController&) =
 +      delete;
-+  ~HeliumCommandBarController();
++  ~HeliumCommandBarController() override;
++
++  // Registers Cmd+T / Cmd+L at high accelerator priority. Called once the
++  // window's FocusManager exists.
++  void RegisterAccelerators(views::FocusManager* focus_manager);
 +
 +  void Toggle(gfx::NativeView parent,
 +              const std::u16string& initial_query = {});
@@ -325,6 +366,10 @@
 +  void ActivateItem(size_t index);
 +
 +  base::WeakPtr<HeliumCommandBarController> GetWeakPtr();
++
++  // ui::AcceleratorTarget:
++  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
++  bool CanHandleAccelerators() const override;
 +
 + private:
 +  void OnWidgetClosed() {
@@ -344,6 +389,9 @@
 +  raw_ptr<views::Widget> widget_ = nullptr;
 +  // Owned by |widget_|; null when hidden.
 +  raw_ptr<HeliumCommandBarView> view_ = nullptr;
++  // Focus manager holding our high-priority Cmd+T / Cmd+L registration;
++  // unregistered in the destructor.
++  raw_ptr<views::FocusManager> focus_manager_ = nullptr;
 +  std::vector<HeliumCommandBarItem> items_;
 +  std::u16string last_query_;
 +  int history_seq_ = 0;
@@ -361,7 +409,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,279 @@
+@@ -0,0 +1,332 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -369,6 +417,7 @@
 +#include "chrome/browser/ui/helium/helium_command_bar_controller.h"
 +
 +#include "base/functional/bind.h"
++#include "base/strings/utf_string_conversions.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/bookmarks/bookmark_model_factory.h"
 +#include "chrome/browser/favicon/favicon_service_factory.h"
@@ -378,13 +427,18 @@
 +#include "chrome/browser/ui/navigator/browser_navigator.h"
 +#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/common/pref_names.h"
 +#include "components/favicon/core/favicon_service.h"
 +#include "components/history/core/browser/history_service.h"
 +#include "components/keyed_service/core/service_access_type.h"
++#include "components/prefs/pref_service.h"
 +#include "content/public/browser/web_contents.h"
++#include "ui/base/accelerators/accelerator_manager.h"
 +#include "ui/base/clipboard/scoped_clipboard_writer.h"
 +#include "ui/base/page_transition_types.h"
++#include "ui/events/keycodes/keyboard_codes.h"
 +#include "ui/base/window_open_disposition.h"
++#include "ui/views/focus/focus_manager.h"
 +#include "ui/views/widget/widget.h"
 +
 +DEFINE_USER_DATA(HeliumCommandBarController);
@@ -403,7 +457,11 @@
 +    : browser_(browser),
 +      scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this) {}
 +
-+HeliumCommandBarController::~HeliumCommandBarController() = default;
++HeliumCommandBarController::~HeliumCommandBarController() {
++  if (focus_manager_) {
++    focus_manager_->UnregisterAccelerators(this);
++  }
++}
 +
 +void HeliumCommandBarController::Toggle(
 +    gfx::NativeView parent,
@@ -453,6 +511,49 @@
 +base::WeakPtr<HeliumCommandBarController>
 +HeliumCommandBarController::GetWeakPtr() {
 +  return weak_factory_.GetWeakPtr();
++}
++
++void HeliumCommandBarController::RegisterAccelerators(
++    views::FocusManager* focus_manager) {
++  focus_manager_ = focus_manager;
++  for (const ui::KeyboardCode key : {ui::VKEY_T, ui::VKEY_L}) {
++    focus_manager_->RegisterAccelerator(
++        ui::Accelerator(key, ui::EF_PLATFORM_ACCELERATOR),
++        ui::AcceleratorManager::kHighPriority, this);
++  }
++}
++
++bool HeliumCommandBarController::AcceleratorPressed(
++    const ui::Accelerator& accelerator) {
++  if ((accelerator.key_code() != ui::VKEY_T &&
++       accelerator.key_code() != ui::VKEY_L) ||
++      accelerator.modifiers() != ui::EF_PLATFORM_ACCELERATOR) {
++    return false;
++  }
++  if (!browser_->GetProfile()->GetPrefs()->GetBoolean(
++          prefs::kHeliumCommandBarEnabled)) {
++    return false;
++  }
++  // Swallow repeats while open; Esc closes.
++  if (IsShowing()) {
++    return true;
++  }
++  TabStripModel* tab_strip = browser_->GetTabStripModel();
++  content::WebContents* contents =
++      tab_strip ? tab_strip->GetActiveWebContents() : nullptr;
++  if (!contents) {
++    return false;
++  }
++  std::u16string initial;
++  if (accelerator.key_code() == ui::VKEY_L) {
++    initial = base::UTF8ToUTF16(contents->GetVisibleURL().spec());
++  }
++  Toggle(contents->GetNativeView(), initial);
++  return true;
++}
++
++bool HeliumCommandBarController::CanHandleAccelerators() const {
++  return true;
 +}
 +
 +void HeliumCommandBarController::OnQueryChanged(const std::u16string& query) {
@@ -641,6 +742,351 @@
 +  }
 +  Hide();
 +}
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_command_bar_model.h
+@@ -0,0 +1,92 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_MODEL_H_
++#define CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_MODEL_H_
++
++#include <stddef.h>
++
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "components/history/core/browser/history_types.h"
++#include "url/gurl.h"
++
++class GURL;
++class Profile;
++class TabStripModel;
++
++namespace bookmarks {
++class BookmarkModel;
++}  // namespace bookmarks
++
++// One result row. Mirrors Lumno's slate: open tabs first, then bookmarks,
++// history and built-in commands, then a direct URL / default-search row.
++struct HeliumCommandBarItem {
++  enum class Type {
++    kTab,
++    kBookmark,
++    kHistory,
++    kCommand,
++    kUrl,
++    kSearch,
++  };
++
++  enum class Command {
++    kNewTab,
++    kOpenSettings,
++    kOpenHistory,
++    kOpenDownloads,
++    kCopyUrl,
++  };
++
++  Type type;
++  std::u16string title;
++  // Display URL (empty for commands and the search row until composed).
++  std::string url_spec;
++  GURL url;
++  // Set for kTab: index in the window's TabStripModel.
++  int tab_index = -1;
++  // Set for kCommand.
++  Command command = Command::kNewTab;
++  // Higher ranks first. Tabs keep strip order among equal scores.
++  int score = 0;
++};
++
++namespace helium_command_bar_model {
++
++// Maximum rows shown. Extras are clipped, never scrolled.
++inline constexpr size_t kMaxResults = 9;
++
++// Scores |text| (already lowercased title or URL) against |query|
++// (lowercased, non-empty). Prefix beats word-boundary beats substring.
++int ScoreText(const std::u16string& text, const std::u16string& query);
++
++std::vector<HeliumCommandBarItem> TabsForQuery(
++    TabStripModel* tab_strip,
++    const std::u16string& query);
++
++std::vector<HeliumCommandBarItem> BookmarksForQuery(
++    bookmarks::BookmarkModel* model,
++    const std::u16string& query);
++
++std::vector<HeliumCommandBarItem> HistoryItemsForRows(
++    const history::QueryResults& results,
++    const std::u16string& query);
++
++std::vector<HeliumCommandBarItem> CommandsForQuery(
++    const std::u16string& query);
++
++// Direct-navigation or default-search row for a non-empty query. Nullopt when
++// the query is empty or no search provider exists.
++std::optional<HeliumCommandBarItem> UrlOrSearchForQuery(
++    Profile* profile,
++    const std::u16string& query);
++
++void SortAndCap(std::vector<HeliumCommandBarItem>& items);
++
++}  // namespace helium_command_bar_model
++
++#endif  // CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_MODEL_H_
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_command_bar_model.cc
+@@ -0,0 +1,245 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/helium_command_bar_model.h"
++
++#include <algorithm>
++
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/search_engines/template_url_service_factory.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++#include "components/bookmarks/browser/bookmark_node.h"
++#include "components/bookmarks/browser/bookmark_utils.h"
++#include "components/history/core/browser/history_types.h"
++#include "components/search_engines/template_url.h"
++#include "components/search_engines/template_url_service.h"
++#include "content/public/browser/web_contents.h"
++
++namespace helium_command_bar_model {
++namespace {
++
++// Score bands. Prefix beats word-boundary beats substring, mirroring Lumno's
++// exact > prefix > word ordering at a smaller scale.
++constexpr int kScoreExact = 140;
++constexpr int kScorePrefix = 70;
++constexpr int kScoreWord = 45;
++constexpr int kScoreSubstring = 20;
++constexpr int kScoreTabBoost = 10;
++
++bool IsWordBoundary(char16_t c) {
++  return c == u' ' || c == u'/' || c == u'.' || c == u'-' || c == u'_' ||
++         c == u':' || c == u'?' || c == u'&' || c == u'=' || c == u'#';
++}
++
++}  // namespace
++
++int ScoreText(const std::u16string& text, const std::u16string& query) {
++  if (query.empty() || text.size() < query.size()) {
++    return 0;
++  }
++  if (text == query) {
++    return kScoreExact;
++  }
++  if (text.starts_with(query)) {
++    return kScorePrefix;
++  }
++  size_t pos = text.find(query);
++  if (pos == std::u16string::npos) {
++    return 0;
++  }
++  if (pos > 0 && IsWordBoundary(text[pos - 1])) {
++    return kScoreWord;
++  }
++  return kScoreSubstring;
++}
++
++std::vector<HeliumCommandBarItem> TabsForQuery(
++    TabStripModel* tab_strip,
++    const std::u16string& query) {
++  std::vector<HeliumCommandBarItem> items;
++  if (!tab_strip) {
++    return items;
++  }
++  const std::u16string q = base::ToLowerASCII(query);
++  const int active = tab_strip->active_index();
++  for (int i = 0; i < tab_strip->count(); ++i) {
++    if (i == active) {
++      continue;
++    }
++    content::WebContents* contents = tab_strip->GetWebContentsAt(i);
++    if (!contents) {
++      continue;
++    }
++    HeliumCommandBarItem item;
++    item.type = HeliumCommandBarItem::Type::kTab;
++    item.title = contents->GetTitle();
++    item.url = contents->GetURL();
++    item.url_spec = item.url.spec();
++    item.tab_index = i;
++    if (q.empty()) {
++      item.score = kScoreTabBoost;
++      items.push_back(item);
++      continue;
++    }
++    const int title_score =
++        ScoreText(base::ToLowerASCII(item.title), q);
++    const int url_score =
++        ScoreText(base::ToLowerASCII(base::UTF8ToUTF16(item.url_spec)), q);
++    item.score = std::max(title_score, url_score);
++    if (item.score > 0) {
++      item.score += kScoreTabBoost;
++      items.push_back(item);
++    }
++  }
++  return items;
++}
++
++std::vector<HeliumCommandBarItem> BookmarksForQuery(
++    bookmarks::BookmarkModel* model,
++    const std::u16string& query) {
++  std::vector<HeliumCommandBarItem> items;
++  if (!model || !model->loaded() || query.empty()) {
++    return items;
++  }
++  bookmarks::QueryFields query_fields;
++  query_fields.word_phrase_query = std::make_unique<std::u16string>(query);
++  std::vector<const bookmarks::BookmarkNode*> matches =
++      bookmarks::GetBookmarksMatchingProperties(model, query_fields,
++                                                kMaxResults);
++  for (const bookmarks::BookmarkNode* node : matches) {
++    if (!node || !node->url().SchemeIsHTTPOrHTTPS()) {
++      continue;
++    }
++    HeliumCommandBarItem item;
++    item.type = HeliumCommandBarItem::Type::kBookmark;
++    item.title = node->GetTitle();
++    item.url = node->url();
++    item.url_spec = item.url.spec();
++    item.score =
++        std::max(ScoreText(base::ToLowerASCII(item.title),
++                           base::ToLowerASCII(query)),
++                 ScoreText(base::ToLowerASCII(base::UTF8ToUTF16(item.url_spec)),
++                           base::ToLowerASCII(query)));
++    items.push_back(item);
++  }
++  return items;
++}
++
++std::vector<HeliumCommandBarItem> HistoryItemsForRows(
++    const history::QueryResults& results,
++    const std::u16string& query) {
++  std::vector<HeliumCommandBarItem> items;
++  const std::u16string q = base::ToLowerASCII(query);
++  for (const history::URLResult& row : results) {
++    HeliumCommandBarItem item;
++    item.type = HeliumCommandBarItem::Type::kHistory;
++    item.title = row.title().empty() ? base::UTF8ToUTF16(row.url().spec())
++                                     : row.title();
++    item.url = row.url();
++    item.url_spec = item.url.spec();
++    const int title_score = ScoreText(base::ToLowerASCII(item.title), q);
++    const int url_score =
++        ScoreText(base::ToLowerASCII(base::UTF8ToUTF16(item.url_spec)), q);
++    item.score = std::max(title_score, url_score);
++    if (item.score == 0) {
++      continue;
++    }
++    // Slight boost for frequently and recently visited pages.
++    item.score += std::min(row.visit_count(), 10);
++    items.push_back(item);
++  }
++  return items;
++}
++
++std::vector<HeliumCommandBarItem> CommandsForQuery(
++    const std::u16string& query) {
++  static constexpr struct {
++    const char* title;
++    HeliumCommandBarItem::Command command;
++  } kCommands[] = {
++      {"New Tab", HeliumCommandBarItem::Command::kNewTab},
++      {"Open Settings", HeliumCommandBarItem::Command::kOpenSettings},
++      {"Show History", HeliumCommandBarItem::Command::kOpenHistory},
++      {"Show Downloads", HeliumCommandBarItem::Command::kOpenDownloads},
++      {"Copy Page URL", HeliumCommandBarItem::Command::kCopyUrl},
++  };
++  std::vector<HeliumCommandBarItem> items;
++  const std::u16string q = base::ToLowerASCII(query);
++  for (const auto& entry : kCommands) {
++    std::u16string title = base::UTF8ToUTF16(entry.title);
++    int score = q.empty() ? 0
++                          : ScoreText(base::ToLowerASCII(title), q);
++    if (q.empty() || score == 0) {
++      continue;
++    }
++    HeliumCommandBarItem item;
++    item.type = HeliumCommandBarItem::Type::kCommand;
++    item.title = title;
++    item.command = entry.command;
++    item.score = score;
++    items.push_back(item);
++  }
++  return items;
++}
++
++std::optional<HeliumCommandBarItem> UrlOrSearchForQuery(
++    Profile* profile,
++    const std::u16string& query) {
++  const std::string trimmed(base::TrimWhitespaceASCII(
++      base::UTF16ToUTF8(query), base::TrimPositions::TRIM_ALL));
++  if (trimmed.empty()) {
++    return std::nullopt;
++  }
++  // Direct URL, with or without a scheme.
++  GURL url(trimmed);
++  if (!url.has_scheme() && trimmed.find(' ') == std::string::npos &&
++      trimmed.find('.') != std::string::npos) {
++    url = GURL("https://" + trimmed);
++  }
++  if (url.is_valid() && url.has_scheme() &&
++      (url.SchemeIs("http") || url.SchemeIs("https"))) {
++    HeliumCommandBarItem item;
++    item.type = HeliumCommandBarItem::Type::kUrl;
++    item.title = base::UTF8ToUTF16(url.spec());
++    item.url = url;
++    item.url_spec = url.spec();
++    item.score = 1;
++    return item;
++  }
++  // Fall back to the default search engine.
++  TemplateURLService* template_urls =
++      TemplateURLServiceFactory::GetForProfile(profile);
++  const TemplateURL* provider =
++      template_urls ? template_urls->GetDefaultSearchProvider() : nullptr;
++  if (!provider) {
++    return std::nullopt;
++  }
++  TemplateURLRef::SearchTermsArgs args(query);
++  GURL search_url(
++      provider->url_ref().ReplaceSearchTerms(args, template_urls->search_terms_data()));
++  if (!search_url.is_valid()) {
++    return std::nullopt;
++  }
++  HeliumCommandBarItem item;
++  item.type = HeliumCommandBarItem::Type::kSearch;
++  item.title = query;
++  item.url = search_url;
++  item.url_spec = search_url.spec();
++  item.score = 1;
++  return item;
++}
++
++void SortAndCap(std::vector<HeliumCommandBarItem>& items) {
++  std::ranges::stable_sort(items, [](const HeliumCommandBarItem& a,
++                                     const HeliumCommandBarItem& b) {
++    return a.score > b.score;
++  });
++  if (items.size() > kMaxResults) {
++    items.resize(kMaxResults);
++  }
++}
++
++}  // namespace helium_command_bar_model
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.h
