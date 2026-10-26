@@ -41,7 +41,7 @@
 
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
-@@ -19,3 +19,44 @@
+@@ -19,3 +19,45 @@
      "//chrome/common:constants",
    ]
  }
@@ -63,6 +63,7 @@
 +  ]
 +
 +  deps = [
++    "//chrome/app/vector_icons",
 +    "//chrome/browser/bookmarks",
 +    "//chrome/browser/favicon",
 +    "//chrome/browser/history",
@@ -1506,7 +1507,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,413 @@
+@@ -0,0 +1,432 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1517,6 +1518,7 @@
 +
 +#include "base/functional/bind.h"
 +#include "base/strings/utf_string_conversions.h"
++#include "chrome/app/vector_icons/vector_icons.h"
 +#include "ui/base/metadata/metadata_impl_macros.h"
 +#include "ui/base/models/image_model.h"
 +#include "ui/color/color_id.h"
@@ -1544,7 +1546,15 @@
 +constexpr int kHorizontalPadding = 8;
 +constexpr int kBubbleRadius = 16;
 +constexpr int kRowRadius = 8;
++constexpr int kMarkerWidth = 16;
++constexpr int kIconSize = 16;
 +constexpr int kTagWidth = 88;
++constexpr int kGap = 8;
++// Fixed text column: row width minus insets, marker, icon, tag and gaps.
++// Fixed columns keep every row identical, so tags always line up.
++constexpr int kTextWidth = kBarWidth - 2 * kHorizontalPadding -
++                           kMarkerWidth - kGap - kIconSize - kGap -
++                           kTagWidth - kGap - 2 * kHorizontalPadding;
 +
 +const char* TagForType(HeliumCommandBarItem::Type type) {
 +  switch (type) {
@@ -1580,17 +1590,23 @@
 +    // Fix the cross-axis so the column widths below stay stable.
 +    SetPreferredSize(gfx::Size(kBarWidth - 2 * kHorizontalPadding, kRowHeight));
 +    marker_ = AddChildView(std::make_unique<views::Label>(u""));
-+    marker_->SetPreferredSize(gfx::Size(16, kRowHeight));
++    marker_->SetPreferredSize(gfx::Size(kMarkerWidth, kRowHeight));
 +    icon_ = AddChildView(std::make_unique<views::ImageView>());
-+    icon_->SetPreferredSize(gfx::Size(16, 16));
++    icon_->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
++    icon_->SetImageSize(gfx::Size(kIconSize, kIconSize));
++    icon_->SetHorizontalAlignment(views::ImageView::Alignment::kCenter);
 +    icon_->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
++    // Default glyph so rows without a favicon (commands, chrome:// pages)
++    // still show an icon. Replaced when the favicon arrives.
++    icon_->SetImage(ui::ImageModel::FromVectorIcon(
++        kGlobeIcon, ui::kColorMenuIcon, kIconSize));
 +    auto* text = AddChildView(std::make_unique<views::View>());
 +    text->SetLayoutManager(std::make_unique<views::BoxLayout>(
 +        views::BoxLayout::Orientation::kVertical, gfx::Insets(), 1));
 +    text->SetProperty(
 +        views::kFlexBehaviorKey,
 +        views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
-+                                 views::MaximumFlexSizeRule::kUnbounded));
++                                 views::MaximumFlexSizeRule::kPreferred));
 +    auto* title = text->AddChildView(std::make_unique<views::Label>(
 +        item.title, views::style::CONTEXT_LABEL,
 +        views::style::STYLE_PRIMARY));
@@ -1607,6 +1623,10 @@
 +    url->SetElideBehavior(gfx::ELIDE_TAIL);
 +    url->SetFontList(
 +        url->font_list().DeriveWithSizeDelta(-2));
++    // Fixed width so every row lines up and the tag column never moves.
++    // Height follows the two labels; the row centers it vertically.
++    text->SetPreferredSize(
++        gfx::Size(kTextWidth, text->GetPreferredSize().height()));
 +    auto* tag = AddChildView(std::make_unique<views::Label>(
 +        base::UTF8ToUTF16(TagForType(item.type)),
 +        views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
