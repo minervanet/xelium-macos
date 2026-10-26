@@ -4012,7 +4012,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.cc
-@@ -0,0 +1,746 @@
+@@ -0,0 +1,750 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -4684,6 +4684,10 @@
 +      views::Button::STATE_NORMAL,
 +      ui::ImageModel::FromVectorIcon(kAddIcon, ui::kColorMenuIcon,
 +                                     kDotHitSize - 8));
++  // ImageButton draws its image at the top-left of its contents by default,
++  // which leaves the plus sitting a few pixels above the dot centres.
++  add_button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
++  add_button->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
 +  add_button->SetTooltipText(
 +      l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_NEW));
 +  add_button->SetPreferredSize(gfx::Size(kDotHitSize, kDotHitSize));
