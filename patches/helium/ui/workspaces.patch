@@ -1000,7 +1000,18 @@
  #include "chrome/browser/ui/intent_picker_tab_helper.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/omnibox/omnibox_view.h"
-@@ -927,6 +929,30 @@
+@@ -203,6 +205,10 @@
+ constexpr int kToolbarActionsFlexOrder = kToolbarFlexOrderOffset + 2;
+ constexpr int kExtensionsFlexOrder = kToolbarFlexOrderOffset + 3;
+ constexpr int kTabStripFlexOrder = kToolbarFlexOrderOffset + 4;
++// The workspace dot row must yield to every trailing toolbar control: it gets
++// the lowest allocation priority so it shrinks (and scrolls internally) before
++// extensions, pinned actions, avatar or the app menu are ever squeezed out.
++constexpr int kWorkspaceSwitcherFlexOrder = kToolbarFlexOrderOffset + 1000;
+ 
+ constexpr int kDynamicNewTabButtonIconSize = 16;
+ 
+@@ -927,6 +933,34 @@
        prefs::kHeliumCenteredLocationBar, prefs,
        base::BindRepeating(&ToolbarView::OnLocationBarCenteredChanged,
                            base::Unretained(this)));
@@ -1014,36 +1025,37 @@
 +    workspace_switcher_->SetProperty(
 +        views::kFlexBehaviorKey,
 +        views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToMinimum,
-+                                 views::MaximumFlexSizeRule::kPreferred));
++                                 views::MaximumFlexSizeRule::kPreferred)
++            .WithOrder(kWorkspaceSwitcherFlexOrder));
 +
 +    // A zero-preferred-size spacer is ignored by FlexLayout, so give it a
 +    // nominal size; it absorbs the slack that keeps the trailing controls at
 +    // the end of the bar while the sidebar hosts the navigation controls.
++    // Same low priority as the switcher so neither ever outranks the trailing
++    // controls.
 +    auto spacer = std::make_unique<views::View>();
 +    spacer->SetPreferredSize(gfx::Size(1, 1));
 +    spacer->SetProperty(
 +        views::kFlexBehaviorKey,
 +        views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
-+                                 views::MaximumFlexSizeRule::kUnbounded));
++                                 views::MaximumFlexSizeRule::kUnbounded)
++            .WithOrder(kWorkspaceSwitcherFlexOrder));
 +    spacer->SetVisible(false);
 +    toolbar_spacer_ = AddChildViewAt(std::move(spacer), 1);
 +  }
  
    InitLayout();
  
-@@ -1557,11 +1583,24 @@
-   // element. False if on a clickable element, true if not on a clickable element.
-   for (views::View* const child : children()) {
-     if (!child->GetVisible()) {
-+      continue;
-+    }
-+
-+    // The spacer only absorbs slack; it must not turn the empty part of the
-+    // top bar into a client area, or the window stops being draggable there.
-+    if (child == toolbar_spacer_.get()) {
+@@ -1560,8 +1594,21 @@
        continue;
      }
  
++    // The spacer only absorbs slack; it must not turn the empty part of the
++    // top bar into a client area, or the window stops being draggable there.
++    if (child == toolbar_spacer_.get()) {
++      continue;
++    }
++
      const gfx::Rect target_rect = get_target_rect(child);
      if (child->GetLocalBounds().Intersects(target_rect)) {
 +      // Workspace dots and the add button are clickable, but the rest of the
@@ -1056,7 +1068,7 @@
        // Check if the rect is actually on the child.
        if (child->HitTestRect(target_rect)) {
          return false;
-@@ -2415,11 +2454,24 @@
+@@ -2415,11 +2462,24 @@
                                               : views::kSidebarLeftIcon);
      }
  
