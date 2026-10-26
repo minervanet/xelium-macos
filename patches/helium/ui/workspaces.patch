@@ -70,7 +70,7 @@
 
 --- a/chrome/app/generated_resources.grd
 +++ b/chrome/app/generated_resources.grd
-@@ -12098,6 +12098,26 @@
+@@ -12098,6 +12098,41 @@
            {NUM_TABS, plural,
            =1 {Add tab to reading list}
            other {Add tabs to reading list}}
@@ -89,19 +89,33 @@
 +        <message name="IDS_HELIUM_WORKSPACE_DELETE" desc="The label of the menu item that deletes a workspace.">
 +          Delete
 +        </message>
++        <message name="IDS_HELIUM_WORKSPACE_DELETE_TITLE" desc="The title of the dialog that asks for confirmation before deleting a workspace.">
++          Delete workspace?
++        </message>
++        <message name="IDS_HELIUM_WORKSPACE_DELETE_BODY" desc="The body of the dialog that asks for confirmation before deleting a workspace.">
++          All tabs in "<ph name="WORKSPACE_NAME">$1<ex>Work</ex></ph>" will be closed. This cannot be undone.
++        </message>
 +        <message name="IDS_HELIUM_WORKSPACE_RENAME_TITLE" desc="The title of the dialog that renames a workspace.">
 +          Rename workspace
 +        </message>
 +        <message name="IDS_HELIUM_WORKSPACE_ACTIVE" desc="Suffix for the tooltip of the currently active workspace.">
 +          active
++        </message>
++        <message name="IDS_HELIUM_WORKSPACE_MOVE_LEFT" desc="The label of the menu item that moves a workspace one position to the left in the workspace switcher.">
++          Move left
++        </message>
++        <message name="IDS_HELIUM_WORKSPACE_MOVE_RIGHT" desc="The label of the menu item that moves a workspace one position to the right in the workspace switcher.">
++          Move right
++        </message>
++        <message name="IDS_HELIUM_WORKSPACE_COLOR" desc="The label of the submenu that picks the color of a workspace.">
++          Color
          </message>
          <message name="IDS_TAB_CXMENU_ADD_TAB_TO_GROUP" desc="The label of the tab context menu submenu for adding one or more tabs to either a new group or an existing tab group. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural,
-@@ -12244,7 +12264,27 @@
-           {NUM_TABS, plural,
+@@ -12245,6 +12280,41 @@
            =1 {Add Tab to Reading List}
            other {Add Tabs to Reading List}}
-+        </message>
+         </message>
 +        <message name="IDS_HELIUM_WORKSPACE_MOVE_MENU" desc="In Title Case: The label of the tab context menu submenu for moving one or more tabs to a workspace.">
 +          {NUM_TABS, plural,
 +          =1 {Move Tab to Workspace}
@@ -112,15 +126,30 @@
 +        </message>
 +        <message name="IDS_HELIUM_WORKSPACE_RENAME" desc="In Title Case: The label of the menu item that renames a workspace.">
 +          Rename
-         </message>
++        </message>
 +        <message name="IDS_HELIUM_WORKSPACE_DELETE" desc="In Title Case: The label of the menu item that deletes a workspace.">
 +          Delete
++        </message>
++        <message name="IDS_HELIUM_WORKSPACE_DELETE_TITLE" desc="In Title Case: The title of the dialog that asks for confirmation before deleting a workspace.">
++          Delete Workspace?
++        </message>
++        <message name="IDS_HELIUM_WORKSPACE_DELETE_BODY" desc="In Title Case: The body of the dialog that asks for confirmation before deleting a workspace.">
++          All tabs in "<ph name="WORKSPACE_NAME">$1<ex>Work</ex></ph>" will be closed. This cannot be undone.
 +        </message>
 +        <message name="IDS_HELIUM_WORKSPACE_RENAME_TITLE" desc="In Title Case: The title of the dialog that renames a workspace.">
 +          Rename Workspace
 +        </message>
 +        <message name="IDS_HELIUM_WORKSPACE_ACTIVE" desc="In Title Case: Suffix for the tooltip of the currently active workspace.">
 +          Active
++        </message>
++        <message name="IDS_HELIUM_WORKSPACE_MOVE_LEFT" desc="In Title Case: The label of the menu item that moves a workspace one position to the left in the workspace switcher.">
++          Move Left
++        </message>
++        <message name="IDS_HELIUM_WORKSPACE_MOVE_RIGHT" desc="In Title Case: The label of the menu item that moves a workspace one position to the right in the workspace switcher.">
++          Move Right
++        </message>
++        <message name="IDS_HELIUM_WORKSPACE_COLOR" desc="In Title Case: The label of the submenu that picks the color of a workspace.">
++          Color
 +        </message>
          <message name="IDS_TAB_CXMENU_ADD_TAB_TO_GROUP" desc="In Title Case: The label of the tab context menu submenu for adding one or more tabs to either a new group or an existing tab group. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural,
@@ -437,9 +466,570 @@
 +  ]
 +}
 
+--- a/chrome/browser/ui/unload_controller.cc
++++ b/chrome/browser/ui/unload_controller.cc
+@@ -29,6 +29,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
+ #include "chrome/browser/ui/chrome_pages.h"
++#include "chrome/browser/ui/helium/helium_workspace_controller.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_group_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -188,6 +189,12 @@
+   SessionServiceBase* service =
+       GetAppropriateSessionServiceForProfile(browser_);
+ 
++  // Helium: persist the visible workspace while its tabs are still alive.
++  if (HeliumWorkspaceController* workspaces =
++          HeliumWorkspaceController::From(browser_)) {
++    workspaces->FlushSave();
++  }
++
+   if (service) {
+     service->WindowClosing(browser_->GetSessionID());
+   }
+
+--- a/chrome/browser/ui/webui/tab_search/tab_search_page_handler.h
++++ b/chrome/browser/ui/webui/tab_search/tab_search_page_handler.h
+@@ -160,6 +160,14 @@
+       sessions::tab_restore::Tab* tab,
+       const base::Time& close_time);
+ 
++  // Appends tabs parked in this browser window's inactive workspaces so tab
++  // search can find and switch to them.
++  void AppendParkedWorkspaceTabs(BrowserWindowInterface* browser,
++                                 tab_search::mojom::Window* window);
++
++  // Returns the browser window that owns |tab|, including detached tabs.
++  BrowserWindowInterface* FindBrowserForTab(tabs::TabInterface* tab);
++
+   tabs_api::TabStripService* GetTabStripService(
+       BrowserWindowInterface* browser) const;
+ 
+
+--- a/chrome/browser/ui/webui/tab_search/tab_search_page_handler.cc
++++ b/chrome/browser/ui/webui/tab_search/tab_search_page_handler.cc
+@@ -31,7 +31,9 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/helium_workspace_controller.h"
+ #include "chrome/browser/ui/interaction/browser_elements.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/tab_ui_helper.h"
+@@ -216,6 +218,16 @@
+ void TabSearchPageHandler::CloseTab(int32_t tab_id) {
+   tabs::TabInterface* const tab = GetTabInterface(tab_id);
+   if (!tab) {
++    // Parked tabs in inactive workspaces are not in the tab strip service.
++    tabs::TabInterface* parked = tabs::TabHandle(tab_id).Get();
++    BrowserWindowInterface* browser =
++        parked ? FindBrowserForTab(parked) : nullptr;
++    if (parked && browser && ShouldTrackBrowser(profile_, browser)) {
++      if (HeliumWorkspaceController* controller =
++              HeliumWorkspaceController::From(browser)) {
++        controller->CloseParkedTab(parked->GetContents());
++      }
++    }
+     return;
+   }
+ 
+@@ -253,6 +265,15 @@
+   for (int32_t tab_id : tab_ids) {
+     tabs::TabInterface* const tab = GetTabInterface(tab_id);
+     if (!tab) {
++      tabs::TabInterface* parked = tabs::TabHandle(tab_id).Get();
++      BrowserWindowInterface* browser =
++          parked ? FindBrowserForTab(parked) : nullptr;
++      if (parked && browser && ShouldTrackBrowser(profile_, browser)) {
++        if (HeliumWorkspaceController* controller =
++                HeliumWorkspaceController::From(browser)) {
++          controller->CloseParkedTab(parked->GetContents());
++        }
++      }
+       continue;
+     }
+ 
+@@ -361,19 +382,44 @@
+ 
+ void TabSearchPageHandler::SwitchToTab(
+     tab_search::mojom::SwitchToTabInfoPtr switch_to_tab_info) {
+-  tabs::TabInterface* const tab = GetTabInterface(switch_to_tab_info->tab_id);
++  tabs::TabInterface* tab = GetTabInterface(switch_to_tab_info->tab_id);
++  BrowserWindowInterface* tab_browser =
++      tab ? tab->GetBrowserWindowInterface() : nullptr;
+   if (!tab) {
++    // The tab may be parked in an inactive workspace of a tracked window.
++    tab = tabs::TabHandle(switch_to_tab_info->tab_id).Get();
++    if (!tab) {
++      return;
++    }
++    tab_browser = FindBrowserForTab(tab);
++    if (!tab_browser) {
++      return;
++    }
++  }
++  if (!tab_browser) {
+     return;
+   }
+ 
++  HeliumWorkspaceController* controller =
++      HeliumWorkspaceController::From(tab_browser);
++  if (controller && controller->IsAvailable()) {
++    for (const auto& entry : controller->GetLoadedTabs()) {
++      if (entry.contents == tab->GetContents() && !entry.active_workspace) {
++        if (!controller->SwitchToWorkspace(entry.workspace_id)) {
++          return;
++        }
++        break;
++      }
++    }
++  }
++
+   action_ = action_ == TabSearchCloseAction::kCloseTab
+                 ? TabSearchCloseAction::kSwitchTabAndCloseTab
+                 : TabSearchCloseAction::kSwitchTab;
+ 
+   profile_->GetPrefs()->SetBoolean(tab_search_prefs::kTabSearchUsed, true);
+ 
+-  tabs_api::TabStripService* const service =
+-      GetTabStripService(tab->GetBrowserWindowInterface());
++  tabs_api::TabStripService* const service = GetTabStripService(tab_browser);
+   const auto result =
+       service->ActivateTab(tabs_api::NodeId::FromTabHandle(tab->GetHandle()));
+   DCHECK(result.has_value());
+@@ -381,7 +427,7 @@
+   // Tab search shows tabs from other windows in the profile. So if a user
+   // selects a tab in another window, we need to manually activate it so
+   // that we can bring that window to the foreground.
+-  tab->GetBrowserWindowInterface()->GetWindow()->Activate();
++  tab_browser->GetWindow()->Activate();
+   metrics_reporter_->Measure(
+       "SwitchToTab",
+       base::BindOnce(
+@@ -462,6 +508,74 @@
+   }
+ }
+ 
++void TabSearchPageHandler::AppendParkedWorkspaceTabs(
++    BrowserWindowInterface* browser,
++    tab_search::mojom::Window* window) {
++  HeliumWorkspaceController* controller =
++      HeliumWorkspaceController::From(browser);
++  if (!controller || !controller->IsAvailable()) {
++    return;
++  }
++  for (const auto& entry : controller->GetLoadedTabs()) {
++    if (entry.active_workspace || !entry.contents) {
++      continue;
++    }
++    tabs::TabInterface* tab =
++        tabs::TabInterface::MaybeGetFromContents(entry.contents);
++    if (!tab || !TabUIHelper::From(tab)) {
++      continue;
++    }
++    content::WebContents* contents = tab->GetContents();
++    if (!contents ||
++        !contents->GetController().GetLastCommittedEntry()) {
++      continue;
++    }
++    auto mojom_tab = GetTab(tab);
++    // Parked groups/splits are not part of the tab search tree; present the
++    // tabs plainly so they remain searchable and switchable.
++    mojom_tab->group_id.reset();
++    mojom_tab->split = false;
++    mojom_tab->split_id.reset();
++    mojom_tab->split_layout.reset();
++    mojom_tab->pinned = false;
++    mojom_tab->active = false;
++    mojom_tab->visible = false;
++    window->tabs.push_back(std::move(mojom_tab));
++  }
++}
++
++BrowserWindowInterface* TabSearchPageHandler::FindBrowserForTab(
++    tabs::TabInterface* tab) {
++  if (!tab) {
++    return nullptr;
++  }
++  if (BrowserWindowInterface* browser = tab->GetBrowserWindowInterface()) {
++    return browser;
++  }
++  BrowserWindowInterface* result = nullptr;
++  // Walk windows in creation order: the owning window is an intrinsic
++  // property of the tab, not something to guess from activation history.
++  GlobalBrowserCollection::GetInstance()->ForEach(
++      [&](BrowserWindowInterface* browser) {
++        if (!ShouldTrackBrowser(profile_, browser)) {
++          return true;
++        }
++        HeliumWorkspaceController* controller =
++            HeliumWorkspaceController::From(browser);
++        if (!controller || !controller->IsAvailable()) {
++          return true;
++        }
++        for (const auto& entry : controller->GetLoadedTabs()) {
++          if (entry.contents == tab->GetContents()) {
++            result = browser;
++            return false;
++          }
++        }
++        return true;
++      });
++  return result;
++}
++
+ tab_search::mojom::ProfileDataPtr TabSearchPageHandler::CreateProfileData() {
+   auto profile_data = tab_search::mojom::ProfileData::New();
+ 
+@@ -490,6 +604,7 @@
+ 
+         WalkContainer(get_tabs_result.value(), window.get(), profile_data.get(),
+                       tab_dedup_keys, tab_group_ids);
++        AppendParkedWorkspaceTabs(browser, window.get());
+ 
+         profile_data->windows.push_back(std::move(window));
+ 
+
+--- a/chrome/browser/ui/accelerator_table.cc
++++ b/chrome/browser/ui/accelerator_table.cc
+@@ -75,6 +75,12 @@
+     {ui::VKEY_L, ui::EF_PLATFORM_ACCELERATOR, IDC_FOCUS_LOCATION},
+     {ui::VKEY_L, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
+      IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN},
++    {ui::VKEY_RIGHT, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN |
++                         ui::EF_PLATFORM_ACCELERATOR,
++     IDC_HELIUM_NEXT_WORKSPACE},
++    {ui::VKEY_LEFT, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN |
++                        ui::EF_PLATFORM_ACCELERATOR,
++     IDC_HELIUM_PREVIOUS_WORKSPACE},
+     {ui::VKEY_O, ui::EF_PLATFORM_ACCELERATOR, IDC_OPEN_FILE},
+     {ui::VKEY_P, ui::EF_PLATFORM_ACCELERATOR, IDC_PRINT},
+     {ui::VKEY_R, ui::EF_PLATFORM_ACCELERATOR, IDC_RELOAD},
+
+--- a/chrome/browser/ui/cocoa/accelerators_cocoa.mm
++++ b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+@@ -113,6 +113,12 @@
+      ui::VKEY_I},
+ #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+     {IDC_TAB_SEARCH, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN, ui::VKEY_A},
++    {IDC_HELIUM_NEXT_WORKSPACE,
++     ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN,
++     ui::VKEY_RIGHT},
++    {IDC_HELIUM_PREVIOUS_WORKSPACE,
++     ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN,
++     ui::VKEY_LEFT},
+ };
+ 
+ ui::Accelerator AcceleratorForCloseWindow() {
+
+--- a/chrome/app/chrome_command_ids.h
++++ b/chrome/app/chrome_command_ids.h
+@@ -298,6 +298,8 @@
+ #define IDC_SHOW_TTC_MENU 40306
+ 
+ #define IDC_HELIUM_SERVICES_OPEN 40700
++#define IDC_HELIUM_NEXT_WORKSPACE 40701
++#define IDC_HELIUM_PREVIOUS_WORKSPACE 40702
+ 
+ // Spell-check
+ #define IDC_SPELLCHECK_SUGGESTION_0     41000
+
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -71,6 +71,7 @@
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
++#include "chrome/browser/ui/helium/helium_workspace_controller.h"
+ #include "chrome/browser/ui/lens/lens_overlay_controller.h"
+ #include "chrome/browser/ui/managed_ui.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+@@ -859,6 +860,14 @@
+           TabStripUserGestureDetails(
+               TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));
+       break;
++    case IDC_HELIUM_NEXT_WORKSPACE:
++    case IDC_HELIUM_PREVIOUS_WORKSPACE:
++      if (HeliumWorkspaceController* workspaces =
++              HeliumWorkspaceController::From(browser_)) {
++        workspaces->SwitchToAdjacentWorkspace(
++            id == IDC_HELIUM_NEXT_WORKSPACE ? 1 : -1);
++      }
++      break;
+     case IDC_DUPLICATE_TAB:
+       DuplicateTab(browser_);
+       break;
+@@ -2090,6 +2099,10 @@
+   // These are always enabled; the menu determines their menu item visibility.
+   command_updater_->UpdateCommandEnabled(IDC_UPGRADE_DIALOG, true);
+   command_updater_->UpdateCommandEnabled(IDC_HELIUM_SERVICES_OPEN, true);
++  // Workspace shortcuts are always registered; the handler no-ops when the
++  // feature is off or the window has a single workspace.
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_NEXT_WORKSPACE, true);
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_PREVIOUS_WORKSPACE, true);
+   command_updater_->UpdateCommandEnabled(IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN,
+                                          false);
+   command_updater_->UpdateCommandEnabled(IDC_SET_BROWSER_AS_DEFAULT, true);
+
+--- a/chrome/browser/ui/views/tabs/visual_tab_switcher.h
++++ b/chrome/browser/ui/views/tabs/visual_tab_switcher.h
+@@ -7,6 +7,7 @@
+ 
+ #include <memory>
+ #include <optional>
++#include <string>
+ #include <vector>
+ 
+ #include "base/callback_list.h"
+@@ -86,7 +87,16 @@
+   raw_ptr<TabStripModel> observed_model_ = nullptr;
+   base::ScopedObservation<views::Widget, views::WidgetObserver>
+       widget_observation_{this};
+-  std::vector<raw_ptr<content::WebContents>> tabs_;
++  // One entry per selectable tab. Entries from inactive workspaces are only
++  // included while those workspaces are loaded in memory; selecting one
++  // switches workspaces first and then activates the tab by identity.
++  struct TabEntry {
++    raw_ptr<content::WebContents> contents;
++    std::string workspace_id;
++    bool active_workspace = false;
++    size_t order = 0;
++  };
++  std::vector<TabEntry> tabs_;
+   std::vector<raw_ptr<views::Button>> buttons_;
+   std::vector<raw_ptr<views::ImageView>> images_;
+   std::vector<std::unique_ptr<ThumbnailImage::Subscription>> subscriptions_;
+
+--- a/chrome/browser/ui/views/tabs/visual_tab_switcher.cc
++++ b/chrome/browser/ui/views/tabs/visual_tab_switcher.cc
+@@ -15,6 +15,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/helium/helium_workspace_controller.h"
+ #include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/thumbnails/thumbnail_tab_helper.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+@@ -111,10 +112,17 @@
+ END_METADATA
+ 
+ std::u16string GetTabTitle(content::WebContents* contents) {
+-  return TabUIHelper::From(tabs::TabInterface::GetFromContents(contents))
+-      ->GetTitle();
++  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
++  TabUIHelper* helper = tab ? TabUIHelper::From(tab) : nullptr;
++  return helper ? helper->GetTitle() : contents->GetTitle();
+ }
+ 
++ui::ImageModel GetTabFavicon(content::WebContents* contents) {
++  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
++  TabUIHelper* helper = tab ? TabUIHelper::From(tab) : nullptr;
++  return helper ? helper->GetFavicon() : ui::ImageModel();
++}
++
+ std::unique_ptr<views::ImageView> MakePreview(const gfx::Size& size) {
+   auto image = std::make_unique<views::ImageView>();
+   image->SetImageSize(size);
+@@ -152,10 +160,32 @@
+     if (list_mode_) {
+       max_tabs = -1;
+     }
+-    for (int i = 0; i < model->count(); ++i) {
+-      if (mru || model->IsTabEligibleForSequentialCycling(i)) {
+-        tabs_.push_back(model->GetWebContentsAt(i));
++    HeliumWorkspaceController* workspace_controller =
++        HeliumWorkspaceController::From(browser_view_->browser());
++    if (workspace_controller && workspace_controller->IsAvailable()) {
++      // Include tabs from every loaded workspace, not just the visible one.
++      for (const auto& tab : workspace_controller->GetLoadedTabs()) {
++        if (!tab.contents) {
++          continue;
++        }
++        if (!mru && tab.active_workspace) {
++          const int tab_index = model->GetIndexOfWebContents(tab.contents);
++          if (tab_index == TabStripModel::kNoTab ||
++              !model->IsTabEligibleForSequentialCycling(tab_index)) {
++            continue;
++          }
++        }
++        tabs_.push_back(
++            {tab.contents, tab.workspace_id, tab.active_workspace,
++             tabs_.size()});
+       }
++    } else {
++      for (int i = 0; i < model->count(); ++i) {
++        if (mru || model->IsTabEligibleForSequentialCycling(i)) {
++          tabs_.push_back({model->GetWebContentsAt(i), std::string(), true,
++                           tabs_.size()});
++        }
++      }
+     }
+     if (tabs_.size() < 2) {
+       tabs_.clear();
+@@ -167,21 +197,23 @@
+     if (mru || limit_tabs) {
+       std::stable_sort(
+           tabs_.begin(), tabs_.end(), [active](const auto& a, const auto& b) {
+-            if (a == active || b == active) {
+-              return a == active && b != active;
++            if (a.contents == active || b.contents == active) {
++              return a.contents == active && b.contents != active;
+             }
+-            return a->GetLastActiveTimeTicks() > b->GetLastActiveTimeTicks();
++            return a.contents->GetLastActiveTimeTicks() >
++                   b.contents->GetLastActiveTimeTicks();
+           });
+     }
+     if (limit_tabs) {
+       tabs_.resize(max_tabs);
+       if (!mru) {
+-        std::ranges::sort(tabs_, {}, [model](const auto& tab) {
+-          return model->GetIndexOfWebContents(tab);
+-        });
++        std::ranges::sort(tabs_, {}, &TabEntry::order);
+       }
+     }
+-    const auto active_tab = std::find(tabs_.begin(), tabs_.end(), active);
++    const auto active_tab =
++        std::find_if(tabs_.begin(), tabs_.end(), [active](const auto& entry) {
++          return entry.contents == active;
++        });
+     if (active_tab == tabs_.end()) {
+       tabs_.clear();
+       return false;
+@@ -266,13 +298,11 @@
+   for (size_t i = 0; i < tabs_.size(); ++i) {
+     const auto callback = base::BindRepeating(&VisualTabSwitcher::AcceptTab,
+                                               weak_factory_.GetWeakPtr(), i);
+-    auto favicon =
+-        TabUIHelper::From(tabs::TabInterface::GetFromContents(tabs_[i]))
+-            ->GetFavicon();
++    auto favicon = GetTabFavicon(tabs_[i].contents);
+     views::Button* button;
+     if (list_mode_) {
+-      auto row =
+-          std::make_unique<views::LabelButton>(callback, GetTabTitle(tabs_[i]));
++      auto row = std::make_unique<views::LabelButton>(
++          callback, GetTabTitle(tabs_[i].contents));
+       row->SetImageModel(views::Button::STATE_NORMAL, favicon);
+       row->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+       row->SetMinSize(gfx::Size(0, kListRowHeight));
+@@ -286,7 +316,8 @@
+           MakePreview(gfx::Size(kThumbnailWidth, kThumbnailHeight)));
+       images_.push_back(image);
+       auto* label = tile->AddChildView(std::make_unique<views::LabelButton>(
+-          views::Button::PressedCallback(), GetTabTitle(tabs_[i])));
++          views::Button::PressedCallback(),
++          GetTabTitle(tabs_[i].contents)));
+       label->SetImageModel(views::Button::STATE_NORMAL, favicon);
+       label->SetMaxSize(gfx::Size(kThumbnailWidth, kTileLabelHeight));
+       label->SetCanProcessEventsWithinSubtree(false);
+@@ -296,7 +327,8 @@
+     }
+     button->SetFocusBehavior(views::View::FocusBehavior::ACCESSIBLE_ONLY);
+     button->GetViewAccessibility().SetRole(ax::mojom::Role::kListBoxOption);
+-    button->GetViewAccessibility().SetName(GetTabTitle(tabs_[i]));
++    button->GetViewAccessibility().SetName(
++        GetTabTitle(tabs_[i].contents));
+     buttons_.push_back(button);
+   }
+   if (!list_mode_) {
+@@ -316,7 +348,7 @@
+       },
+       weak_factory_.GetWeakPtr()));
+   title_ = contents->AddChildView(
+-      std::make_unique<views::Label>(GetTabTitle(tabs_[selected_])));
++      std::make_unique<views::Label>(GetTabTitle(tabs_[selected_].contents)));
+   if (list_mode_) {
+     const int available_preview_height =
+         std::max(1, bounds.height() - layout->inside_border_insets().height() -
+@@ -358,12 +390,13 @@
+     buttons_[i]->GetViewAccessibility().SetIsSelected(i == selected_);
+   }
+   contents_->GetViewAccessibility().SetActiveDescendant(*buttons_[selected_]);
+-  title_->SetText(GetTabTitle(tabs_[selected_]));
++  title_->SetText(GetTabTitle(tabs_[selected_].contents));
+   buttons_[selected_]->ScrollViewToVisible();
+   if (preview_) {
+     subscriptions_.clear();
+     preview_->SetImage(ui::ImageModel());
+-    subscriptions_.push_back(Subscribe(preview_, tabs_[selected_]));
++    subscriptions_.push_back(
++        Subscribe(preview_, tabs_[selected_].contents));
+   } else {
+     UpdateVisibleThumbnails();
+   }
+@@ -376,7 +409,7 @@
+   for (size_t i = 0; i < images_.size(); ++i) {
+     if (!images_[i]->GetVisibleBounds().IsEmpty()) {
+       if (!subscriptions_[i]) {
+-        subscriptions_[i] = Subscribe(images_[i], tabs_[i]);
++        subscriptions_[i] = Subscribe(images_[i], tabs_[i].contents);
+       }
+     } else if (subscriptions_[i]) {
+       subscriptions_[i].reset();
+@@ -388,8 +421,7 @@
+ std::unique_ptr<ThumbnailImage::Subscription> VisualTabSwitcher::Subscribe(
+     views::ImageView* image,
+     content::WebContents* contents) {
+-  auto* model = browser_view_->browser()->tab_strip_model();
+-  auto* tab = model->GetTabForWebContents(contents);
++  auto* tab = tabs::TabInterface::MaybeGetFromContents(contents);
+   auto* helper = tab ? ThumbnailTabHelper::From(tab) : nullptr;
+   if (!helper) {
+     return nullptr;
+@@ -479,14 +511,16 @@
+   if (tabs_.empty()) {
+     return;
+   }
+-  auto* model = observed_model_.get();
+-  const int index = accept && model
+-                        ? model->GetIndexOfWebContents(tabs_[selected_])
+-                        : TabStripModel::kNoTab;
++  content::WebContents* target =
++      accept ? tabs_[selected_].contents.get() : nullptr;
++  const std::string target_workspace =
++      accept ? tabs_[selected_].workspace_id : std::string();
+   weak_factory_.InvalidateWeakPtrs();
+   reveal_timer_.Stop();
+   event_monitor_.reset();
+   scroll_subscription_ = {};
++  // Stop observing before a workspace switch reshuffles the tab strip; the
++  // switch must not cancel this activation halfway through.
+   TabStripModelObserver::StopObservingAll(this);
+   observed_model_ = nullptr;
+   widget_observation_.Reset();
+@@ -504,6 +538,22 @@
+     base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(
+         FROM_HERE, std::move(widget));
+   }
++  if (!target) {
++    return;
++  }
++  auto* browser = browser_view_->browser();
++  HeliumWorkspaceController* controller =
++      HeliumWorkspaceController::From(browser);
++  if (controller && !target_workspace.empty() &&
++      target_workspace != controller->active_workspace_id()) {
++    // Only loaded workspaces are listed, so this switch is synchronous and
++    // the tab keeps its identity (the same WebContents is reinserted).
++    if (!controller->SwitchToWorkspace(target_workspace)) {
++      return;
++    }
++  }
++  auto* model = browser->tab_strip_model();
++  const int index = model->GetIndexOfWebContents(target);
+   if (index != TabStripModel::kNoTab) {
+     model->ActivateTabAt(index,
+                          TabStripUserGestureDetails(
+
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_utils.h
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,75 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -454,6 +1044,7 @@
 +
 +#include "components/sessions/core/serialized_navigation_entry.h"
 +#include "components/sessions/core/session_command.h"
++#include "components/split_tabs/split_tab_visual_data.h"
 +#include "components/tab_groups/tab_group_visual_data.h"
 +
 +class TabStripModel;
@@ -472,26 +1063,33 @@
 +    std::vector<sessions::SerializedNavigationEntry> navigations;
 +    int selected_navigation = 0;
 +    bool pinned = false;
-+    // Index into |groups|. std::nullopt for ungrouped tabs. Splits are not
-+    // preserved across a disk round-trip.
++    // Index into |groups|. std::nullopt for ungrouped tabs.
 +    std::optional<int> group_slot;
++    // Index into |splits|. std::nullopt for tabs outside a split view.
++    std::optional<int> split_slot;
 +    std::string extension_app_id;
 +  };
 +  struct Group {
 +    tab_groups::TabGroupVisualData visual_data;
 +  };
++  struct Split {
++    split_tabs::SplitTabVisualData visual_data;
++  };
 +
 +  std::vector<Tab> tabs;
 +  std::vector<Group> groups;
++  std::vector<Split> splits;
 +  // Active tab as an index into |tabs|.
 +  int active_index = 0;
 +};
 +
 +// Captures the live contents of |tab_strip| (order, pinned state, groups and
 +// navigation history) without detaching or closing anything. Safe to call on
-+// the UI thread only.
++// the UI thread only. When |include_pinned| is false, pinned tabs are omitted:
++// they are shared by every workspace and must not be persisted per workspace.
 +HeliumSerializedWorkspace SerializeLiveTabStrip(
-+    const TabStripModel* tab_strip);
++    const TabStripModel* tab_strip,
++    bool include_pinned = true);
 +
 +// Serializes |workspace| as Chromium session commands describing a single
 +// window. Must run on the UI thread: SessionID allocation is sequence-checked
@@ -510,7 +1108,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_utils.cc
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,280 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -529,6 +1127,7 @@
 +#include "components/sessions/core/session_service_commands.h"
 +#include "components/sessions/core/session_types.h"
 +#include "components/tab_groups/tab_group_visual_data.h"
++#include "components/tabs/public/split_tab_data.h"
 +#include "components/tabs/public/tab_group.h"
 +#include "content/public/browser/navigation_controller.h"
 +#include "content/public/browser/navigation_entry.h"
@@ -541,10 +1140,12 @@
 +// Serializes the navigation history of one live tab.
 +HeliumSerializedWorkspace::Tab SerializeOneTab(content::WebContents* contents,
 +                                              bool pinned,
-+                                              std::optional<int> group_slot) {
++                                              std::optional<int> group_slot,
++                                              std::optional<int> split_slot) {
 +  HeliumSerializedWorkspace::Tab out;
 +  out.pinned = pinned;
 +  out.group_slot = group_slot;
++  out.split_slot = split_slot;
 +  if (!contents) {
 +    return out;
 +  }
@@ -570,13 +1171,15 @@
 +}  // namespace
 +
 +HeliumSerializedWorkspace SerializeLiveTabStrip(
-+    const TabStripModel* tab_strip) {
++    const TabStripModel* tab_strip,
++    bool include_pinned) {
 +  HeliumSerializedWorkspace out;
 +  if (!tab_strip || tab_strip->count() == 0) {
 +    return out;
 +  }
 +  // Assign a stable slot to every group in first-appearance order.
 +  std::map<tab_groups::TabGroupId, int> slots;
++  std::map<split_tabs::SplitTabId, int> split_slots;
 +  if (tab_strip->group_model()) {
 +    for (int i = 0; i < tab_strip->count(); ++i) {
 +      const std::optional<tab_groups::TabGroupId> group =
@@ -596,6 +1199,9 @@
 +    }
 +  }
 +  for (int i = 0; i < tab_strip->count(); ++i) {
++    if (!include_pinned && tab_strip->IsTabPinned(i)) {
++      continue;
++    }
 +    const std::optional<tab_groups::TabGroupId> group =
 +        tab_strip->GetTabGroupForTab(i);
 +    std::optional<int> slot;
@@ -605,11 +1211,48 @@
 +        slot = it->second;
 +      }
 +    }
++    std::optional<int> split_slot;
++    if (const std::optional<split_tabs::SplitTabId> split_id =
++            tab_strip->GetSplitForTab(i);
++        split_id.has_value()) {
++      auto split_it = split_slots.find(split_id.value());
++      if (split_it == split_slots.end()) {
++        const int new_slot = static_cast<int>(out.splits.size());
++        split_slots[split_id.value()] = new_slot;
++        HeliumSerializedWorkspace::Split serialized;
++        if (const split_tabs::SplitTabData* split =
++                tab_strip->GetSplitData(split_id.value())) {
++          serialized.visual_data = *split->visual_data();
++        }
++        out.splits.push_back(std::move(serialized));
++        split_slot = new_slot;
++      } else {
++        split_slot = split_it->second;
++      }
++    }
 +    out.tabs.push_back(SerializeOneTab(tab_strip->GetWebContentsAt(i),
-+                                       tab_strip->IsTabPinned(i), slot));
++                                       tab_strip->IsTabPinned(i), slot,
++                                       split_slot));
++  }
++  const int active = tab_strip->active_index();
++  if (active >= 0 && active < tab_strip->count()) {
++    // Map the active tab into the serialized (possibly pinned-free) list.
++    int position = 0;
++    out.active_index = 0;
++    for (int i = 0; i <= active; ++i) {
++      if (!include_pinned && tab_strip->IsTabPinned(i)) {
++        continue;
++      }
++      if (i == active) {
++        out.active_index = position;
++        break;
++      }
++      ++position;
++    }
 +  }
 +  out.active_index =
-+      std::clamp(tab_strip->active_index(), 0, tab_strip->count() - 1);
++      std::clamp(out.active_index, 0,
++                 std::max(0, static_cast<int>(out.tabs.size()) - 1));
 +  return out;
 +}
 +
@@ -631,6 +1274,13 @@
 +    commands.push_back(sessions::CreateTabGroupMetadataUpdateCommand(
 +        group_ids[slot].value(), &workspace.groups[slot].visual_data));
 +  }
++  std::vector<split_tabs::SplitTabId> split_ids;
++  split_ids.reserve(workspace.splits.size());
++  for (size_t slot = 0; slot < workspace.splits.size(); ++slot) {
++    split_ids.push_back(split_tabs::SplitTabId::GenerateNew());
++    commands.push_back(sessions::CreateSplitTabDataUpdateCommand(
++        split_ids.back(), &workspace.splits[slot].visual_data));
++  }
 +  for (size_t i = 0; i < workspace.tabs.size(); ++i) {
 +    const auto& tab = workspace.tabs[i];
 +    if (tab.navigations.empty()) {
@@ -650,6 +1300,11 @@
 +        group_ids[tab.group_slot.value()].has_value()) {
 +      commands.push_back(sessions::CreateTabGroupCommand(
 +          tab_id, group_ids[tab.group_slot.value()]));
++    }
++    if (tab.split_slot.has_value() && tab.split_slot.value() >= 0 &&
++        static_cast<size_t>(tab.split_slot.value()) < split_ids.size()) {
++      commands.push_back(sessions::CreateSplitTabCommand(
++          tab_id, split_ids[tab.split_slot.value()]));
 +    }
 +    for (const auto& navigation : tab.navigations) {
 +      commands.push_back(
@@ -695,6 +1350,14 @@
 +    group.visual_data = session_group->visual_data;
 +    out->groups.push_back(std::move(group));
 +  }
++  std::map<split_tabs::SplitTabId, int> split_slots;
++  for (const auto& session_split : source->split_tabs) {
++    const int slot = static_cast<int>(out->splits.size());
++    split_slots[session_split->id_] = slot;
++    HeliumSerializedWorkspace::Split split;
++    split.visual_data = session_split->split_visual_data_;
++    out->splits.push_back(std::move(split));
++  }
 +  for (const auto& session_tab : source->tabs) {
 +    if (session_tab->navigations.empty()) {
 +      continue;
@@ -710,6 +1373,12 @@
 +        tab.group_slot = it->second;
 +      }
 +    }
++    if (session_tab->split_id.has_value()) {
++      const auto it = split_slots.find(session_tab->split_id.value());
++      if (it != split_slots.end()) {
++        tab.split_slot = it->second;
++      }
++    }
 +    out->tabs.push_back(std::move(tab));
 +  }
 +  if (out->tabs.empty()) {
@@ -723,7 +1392,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_service.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,121 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -744,6 +1413,7 @@
 +#include "base/time/time.h"
 +#include "components/keyed_service/core/keyed_service.h"
 +#include "components/sessions/core/session_command.h"
++#include "components/tab_groups/tab_group_color.h"
 +
 +class Profile;
 +
@@ -773,6 +1443,8 @@
 +    base::Time modified_at;
 +    // Tab count from the last save; -1 when never saved.
 +    int tab_count = -1;
++    // Accent color picked for the workspace's dot; grey by default.
++    tab_groups::TabGroupColorId color = tab_groups::TabGroupColorId::kGrey;
 +  };
 +
 +  using LoadCallback = base::OnceCallback<void(
@@ -802,6 +1474,14 @@
 +  // Returns false when |id| is unknown, |name| is empty or |name| collides
 +  // with another workspace.
 +  bool RenameWorkspace(const std::string& id, const std::string& name);
++
++  // Changes the workspace's accent color without touching tab data.
++  bool SetWorkspaceColor(const std::string& id,
++                         tab_groups::TabGroupColorId color);
++
++  // Moves |id| to |new_index| in the display order (clamped). Returns false
++  // when |id| is unknown.
++  bool ReorderWorkspace(const std::string& id, int new_index);
 +
 +  // Reads the stored commands and invokes |callback| on the UI thread. The
 +  // callback receives an empty vector when nothing was ever saved or the file
@@ -837,13 +1517,14 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_service.cc
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,341 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
 +
 +#include "chrome/browser/ui/helium/helium_workspace_service.h"
 +
++#include <algorithm>
 +#include <string>
 +#include <utility>
 +
@@ -867,6 +1548,25 @@
 +constexpr char kWorkspaceNameKey[] = "name";
 +constexpr char kWorkspaceModifiedAtKey[] = "modified_at";
 +constexpr char kWorkspaceTabCountKey[] = "tabs";
++constexpr char kWorkspaceColorKey[] = "color";
++
++// Reads the stored accent color, defaulting to grey for missing or unknown
++// values (for example a color removed in a later build).
++tab_groups::TabGroupColorId ColorFromInfo(const base::DictValue* info) {
++  if (!info) {
++    return tab_groups::TabGroupColorId::kGrey;
++  }
++  const std::optional<int> raw = info->FindInt(kWorkspaceColorKey);
++  if (!raw.has_value() || raw.value() < 0 ||
++      raw.value() >= static_cast<int>(
++                         tab_groups::TabGroupColorId::kNumEntries)) {
++    return tab_groups::TabGroupColorId::kGrey;
++  }
++  const auto color = static_cast<tab_groups::TabGroupColorId>(raw.value());
++  return tab_groups::GetTabGroupColorLabelMap().contains(color)
++             ? color
++             : tab_groups::TabGroupColorId::kGrey;
++}
 +
 +void WriteWorkspaceToDisk(
 +    std::vector<std::unique_ptr<sessions::SessionCommand>> commands,
@@ -945,6 +1645,7 @@
 +        base::ValueToTime(info->Find(kWorkspaceModifiedAtKey))
 +            .value_or(base::Time());
 +    workspace.tab_count = info->FindInt(kWorkspaceTabCountKey).value_or(-1);
++    workspace.color = ColorFromInfo(info);
 +    result.push_back(std::move(workspace));
 +  }
 +  return result;
@@ -981,6 +1682,11 @@
 +  }
 +  PrefService* prefs = profile_->GetPrefs();
 +  {
++    // Preserve the accent color chosen for this workspace; saves happen on
++    // every tab change and must not reset it.
++    const base::DictValue* existing =
++        prefs->GetDict(prefs::kHeliumWorkspacesMetadata).FindDict(id);
++    const tab_groups::TabGroupColorId color = ColorFromInfo(existing);
 +    ScopedDictPrefUpdate metadata_update(prefs,
 +                                         prefs::kHeliumWorkspacesMetadata);
 +    base::DictValue entry;
@@ -988,6 +1694,7 @@
 +    entry.Set(kWorkspaceModifiedAtKey,
 +              base::TimeToValue(base::Time::Now()));
 +    entry.Set(kWorkspaceTabCountKey, tab_count);
++    entry.Set(kWorkspaceColorKey, static_cast<int>(color));
 +    metadata_update->Set(id, std::move(entry));
 +  }
 +  {
@@ -1037,6 +1744,51 @@
 +  }
 +  entry->Set(kWorkspaceNameKey, name);
 +  entry->Set(kWorkspaceModifiedAtKey, base::TimeToValue(base::Time::Now()));
++  return true;
++}
++
++bool HeliumWorkspaceService::SetWorkspaceColor(
++    const std::string& id,
++    tab_groups::TabGroupColorId color) {
++  if (id.empty() ||
++      !tab_groups::GetTabGroupColorLabelMap().contains(color)) {
++    return false;
++  }
++  PrefService* prefs = profile_->GetPrefs();
++  ScopedDictPrefUpdate update(prefs, prefs::kHeliumWorkspacesMetadata);
++  base::DictValue* entry = update->FindDict(id);
++  if (!entry) {
++    return false;
++  }
++  entry->Set(kWorkspaceColorKey, static_cast<int>(color));
++  return true;
++}
++
++bool HeliumWorkspaceService::ReorderWorkspace(const std::string& id,
++                                             int new_index) {
++  if (id.empty()) {
++    return false;
++  }
++  PrefService* prefs = profile_->GetPrefs();
++  ScopedListPrefUpdate update(prefs, prefs::kHeliumWorkspacesOrder);
++  int current = -1;
++  for (size_t i = 0; i < update->size(); ++i) {
++    if ((*update)[i].GetString() == id) {
++      current = static_cast<int>(i);
++      break;
++    }
++  }
++  if (current < 0) {
++    return false;
++  }
++  const int target =
++      std::clamp(new_index, 0, static_cast<int>(update->size()) - 1);
++  if (target == current) {
++    return true;
++  }
++  base::Value moved = std::move((*update)[current]);
++  update->erase(update->begin() + current);
++  update->Insert(update->begin() + target, std::move(moved));
 +  return true;
 +}
 +
@@ -1215,7 +1967,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_controller.h
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,314 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1234,16 +1986,27 @@
 +#include "base/functional/callback.h"
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/weak_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/timer/timer.h"
++#include "base/time/time.h"
++#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 +#include "components/prefs/pref_change_registrar.h"
 +#include "components/sessions/core/session_command.h"
++#include "components/split_tabs/split_tab_visual_data.h"
 +#include "components/tab_groups/tab_group_id.h"
 +#include "components/tab_groups/tab_group_visual_data.h"
 +#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 +
 +class BrowserWindowInterface;
++class GlobalBrowserCollection;
 +class HeliumWorkspaceService;
 +class PrefService;
++
++namespace content {
++class WebContents;
++}  // namespace content
 +
 +namespace tabs {
 +class TabInterface;
@@ -1255,21 +2018,23 @@
 +// Several workspaces live inside ONE window. Switching hides the current
 +// workspace's tabs by detaching them from the TabStripModel into memory and
 +// inserts the target workspace's tabs, so tabs are never closed or reloaded
-+// by a switch. Tab groups (names, colors, collapsed state), splits, pinned
-+// state and tab order survive in-session switches through Chromium's detached
-+// tab collections.
++// by a switch. Tab groups (names, colors, collapsed state), splits and tab
++// order survive in-session switches through Chromium's detached tab
++// collections; pinned tabs stay visible and are shared by every workspace.
 +//
 +// Every switch, move and metadata change also serializes the affected
 +// workspace as session commands through HeliumWorkspaceService, so inactive
 +// workspaces survive a restart and are materialized on first use. Anything
 +// unreadable recovers to a single fresh workspace instead of crashing.
 +//
-+// The controller is owned by BrowserWindowFeatures and intentionally observes
-+// neither the tab strip nor individual tabs: saves happen at switch/move
-+// time from fully-known state, which avoids observer-lifetime hazards and
-+// backgrounding the window. With the feature disabled (or in private and
-+// non-normal windows) the controller is inert and the tab strip is untouched.
-+class HeliumWorkspaceController {
++// The controller is owned by BrowserWindowFeatures. It observes the tab strip
++// only to debounce autosave after structural changes, and the global browser
++// collection to decide which window owns the shared workspace set. Individual
++// tabs are never observed. With the feature disabled (or in private and
++// non-normal windows, or in a window that is not the owner) the controller is
++// inert and the tab strip is untouched.
++class HeliumWorkspaceController : public TabStripModelObserver,
++                                  public BrowserCollectionObserver {
 + public:
 +  DECLARE_USER_DATA(HeliumWorkspaceController);
 +
@@ -1289,8 +2054,21 @@
 +    // Live or snapshot tab count; -1 when known only from possibly stale
 +    // on-disk metadata.
 +    int tab_count = -1;
++    tab_groups::TabGroupColorId color = tab_groups::TabGroupColorId::kGrey;
 +  };
 +  std::vector<WorkspaceEntry> GetWorkspaces() const;
++
++  // One tab reachable from the visual tab switcher. |workspace_id| is the
++  // workspace that currently owns it (empty when the feature is off) and
++  // |active_workspace| is true for tabs already in the visible strip. Only
++  // loaded workspaces are reported: inactive workspaces that exist solely on
++  // disk are not materialized just to populate the switcher.
++  struct SwitcherTab {
++    content::WebContents* contents = nullptr;
++    std::string workspace_id;
++    bool active_workspace = false;
++  };
++  std::vector<SwitcherTab> GetLoadedTabs() const;
 +
 +  // False when workspaces are disabled, or for private / non-normal windows.
 +  // Every mutating method below is a no-op returning failure when false.
@@ -1312,6 +2090,24 @@
 +  bool RenameWorkspace(const std::string& id, const std::string& name);
 +  bool DeleteWorkspace(const std::string& id);
 +
++  // Changes the dot color shown for |id|.
++  bool SetWorkspaceColor(const std::string& id,
++                         tab_groups::TabGroupColorId color);
++
++  // Moves |id| to |new_index| in the switcher order (clamped to the number of
++  // workspaces).
++  bool ReorderWorkspace(const std::string& id, int new_index);
++
++  // Switches to the workspace |delta| positions away in display order
++  // (wrapping). Used by the keyboard shortcuts. Returns false when there is
++  // only one workspace or the feature is off.
++  bool SwitchToAdjacentWorkspace(int delta);
++
++  // Closes a tab parked in an inactive workspace (for tab search and similar
++  // surfaces that can reach loaded tabs). Returns false when the tab is not
++  // parked in this window.
++  bool CloseParkedTab(content::WebContents* contents);
++
 +  // Moves the selected tabs (or |index| when it is not selected) into |id|.
 +  // |id| may be inactive; its tabs are loaded first when necessary.
 +  bool MoveTabsToWorkspace(const std::string& id, int index);
@@ -1322,9 +2118,38 @@
 +  using ChangedCallback = base::RepeatingCallback<void()>;
 +  base::CallbackListSubscription AddObserver(ChangedCallback callback);
 +
++  // Writes the visible workspace immediately. Called by the close path before
++  // the tab strip is torn down, so the last few seconds of tab changes are not
++  // lost to the autosave debounce.
++  void FlushSave();
++
 +  base::WeakPtr<HeliumWorkspaceController> GetWeakPtr();
 +
 + private:
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++  void OnTabStripModelDestroyed(TabStripModel* model) override;
++
++  // BrowserCollectionObserver:
++  void OnBrowserCreated(BrowserWindowInterface* browser) override;
++  void OnBrowserClosed(BrowserWindowInterface* browser) override;
++
++  // True when this window is the single window allowed to own workspaces:
++  // the first-created normal window for the profile. Workspaces live in one
++  // window, so extra windows stay plain and can never overwrite the same
++  // workspace set on disk.
++  bool IsWorkspaceOwner() const;
++  void OnWindowSetChanged();
++  // Keeps this window's current tabs as a new workspace. Used when workspaces
++  // move to this window because the previous owner closed, so the previous
++  // owner's saved tabs are never overwritten.
++  void AdoptVisibleTabsAsNewWorkspace();
++
++  void ScheduleAutosave();
++
 +  // Live-detached tabs, in strip order. Groups and splits detached whole
 +  // stay whole through their collections.
 +  using LiveItem = std::variant<std::unique_ptr<DetachedTab>,
@@ -1332,9 +2157,10 @@
 +  struct FlatTab {
 +    std::unique_ptr<tabs::TabModel> model;
 +    bool pinned = false;
-+    // Index into Snapshot::group_visuals; nullopt when ungrouped. Splits are
-+    // flattened on a disk round-trip and regrouped plainly.
++    // Index into Snapshot::group_visuals; nullopt when ungrouped.
 +    std::optional<int> group_slot;
++    // Index into Snapshot::split_visuals; nullopt when not split.
++    std::optional<int> split_slot;
 +  };
 +  struct Snapshot {
 +    std::vector<LiveItem> live_items;
@@ -1343,6 +2169,8 @@
 +    std::vector<tab_groups::TabGroupVisualData> group_visuals;
 +    // Maps a live (possibly detached) group id to its slot.
 +    std::map<tab_groups::TabGroupId, int> group_slots;
++    // Parallel to split slots; empty when the workspace has no split views.
++    std::vector<split_tabs::SplitTabVisualData> split_visuals;
 +    int active_index = 0;
 +    int TabCount() const;
 +  };
@@ -1354,6 +2182,7 @@
 +  struct DetachedSelection {
 +    std::vector<FlatTab> tabs;
 +    std::vector<tab_groups::TabGroupVisualData> visuals;
++    std::vector<split_tabs::SplitTabVisualData> split_visuals;
 +  };
 +  std::optional<DetachedSelection> DetachIndices(std::vector<int> indices);
 +
@@ -1375,12 +2204,24 @@
 +  // Detaches |tabs_to_detach| (captured from the visible strip before
 +  // replacement tabs were inserted) into a snapshot (order, groups, splits,
 +  // pinned state and active index preserved). The strip must hold other tabs
-+  // afterwards; this must never leave the strip empty.
++  // afterwards; this must never leave the strip empty. Pinned tabs are
++  // shared by every workspace and are never detached.
 +  Snapshot DetachVisibleTabs(
 +      const std::vector<tabs::TabInterface*>& tabs_to_detach);
 +
++  // Stores |snapshot| as the parked state of |id|, unless |id| is being
++  // deleted; in that case the tabs are destroyed instead of leaked.
++  void ParkSnapshot(const std::string& id, Snapshot snapshot);
++
++  // Frees parked workspaces that have been inactive for a while, so memory
++  // does not grow with every workspace the user has ever visited. Runs at
++  // switch time (when no tab switcher is holding raw pointers to them).
++  void MaybeDiscardInactiveWorkspaces(const std::string& target_id);
++
 +  // Inserts |snapshot| at the end of the visible strip and activates its
-+  // recorded active tab. The strip must be non-empty.
++  // recorded active tab. The strip must be non-empty. Tabs saved as pinned by
++  // older builds are inserted unpinned: pinned tabs are now universal and
++  // only the ones already in the strip stay pinned.
 +  void InsertSnapshot(Snapshot snapshot);
 +
 +  // Builds detached models for a workspace parsed from disk.
@@ -1400,25 +2241,41 @@
 +  // In-memory tabs of inactive workspaces, keyed by workspace id. The active
 +  // workspace's tabs always live in the tab strip, never here.
 +  std::map<std::string, Snapshot> snapshots_;
++  // When each parked workspace was last hidden; used to unload old ones.
++  std::map<std::string, base::TimeTicks> parked_at_;
 +  // Tabs moved into a workspace whose disk state has not loaded yet. Merged
 +  // into the snapshot when the load completes.
 +  struct PendingMove {
 +    std::vector<FlatTab> tabs;
 +    std::vector<tab_groups::TabGroupVisualData> visuals;
++    std::vector<split_tabs::SplitTabVisualData> split_visuals;
 +  };
 +  std::map<std::string, PendingMove> pending_moves_;
 +  // Set while a disk load for a workspace switch is outstanding.
 +  std::optional<std::string> pending_switch_;
++  // Workspace that is being deleted while its tabs are still visible (the
++  // fallback had to load from disk). Its tabs are destroyed when the switch
++  // completes instead of being parked forever.
++  std::optional<std::string> pending_delete_id_;
 +
 +  std::string active_id_;
 +  bool load_in_flight_ = false;
++  // True once this window has actually owned workspaces. A window that only
++  // inherits them later (because the previous owner closed) keeps its current
++  // tabs in a new workspace instead of overwriting saved data.
++  bool ever_available_ = false;
 +  int switch_sequence_ = 0;
++  // Debounces disk writes while tabs are opened, closed, moved or regrouped.
++  base::OneShotTimer autosave_timer_;
 +
 +  // Registers this controller on the owning window so UI code can reach it
 +  // via HeliumWorkspaceController::From(browser). Must be declared after
 +  // the members it observes and destroyed first.
 +  ui::ScopedUnownedUserData<HeliumWorkspaceController>
 +      scoped_unowned_user_data_;
++
++  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
++      browser_collection_observation_{this};
 +
 +  base::RepeatingCallbackList<void()> observers_;
 +  base::WeakPtrFactory<HeliumWorkspaceController> weak_factory_{this};
@@ -1428,7 +2285,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_controller.cc
-@@ -0,0 +1,885 @@
+@@ -0,0 +1,1463 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1439,11 +2296,15 @@
 +#include <numeric>
 +#include <utility>
 +
++#include "base/functional/bind.h"
++#include "base/location.h"
 +#include "base/strings/string_util.h"
++#include "base/time/time.h"
 +#include "base/unguessable_token.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser_commands.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 +#include "chrome/browser/ui/helium/helium_workspace_service.h"
 +#include "chrome/browser/ui/helium/helium_workspace_service_factory.h"
 +#include "chrome/browser/ui/helium/helium_workspace_utils.h"
@@ -1453,7 +2314,9 @@
 +#include "chrome/common/pref_names.h"
 +#include "components/prefs/pref_service.h"
 +#include "components/sessions/content/content_serialized_navigation_builder.h"
++#include "components/split_tabs/split_tab_id.h"
 +#include "components/tabs/public/split_tab_collection.h"
++#include "components/tabs/public/split_tab_data.h"
 +#include "components/tabs/public/tab_collection.h"
 +#include "components/tabs/public/tab_group.h"
 +#include "components/tabs/public/tab_group_tab_collection.h"
@@ -1525,11 +2388,24 @@
 +      base::BindRepeating(&HeliumWorkspaceController::OnEnabledPrefChanged,
 +                          base::Unretained(this)));
 +  if (IsAvailable()) {
++    ever_available_ = true;
 +    EnsureWorkspaces();
++  }
++  if (GlobalBrowserCollection* collection =
++          GlobalBrowserCollection::GetInstance()) {
++    browser_collection_observation_.Observe(collection);
++  }
++  if (TabStripModel* tab_strip = GetTabStripModel()) {
++    tab_strip->AddObserver(this);
 +  }
 +}
 +
-+HeliumWorkspaceController::~HeliumWorkspaceController() = default;
++HeliumWorkspaceController::~HeliumWorkspaceController() {
++  autosave_timer_.Stop();
++  if (TabStripModel* tab_strip = GetTabStripModel()) {
++    tab_strip->RemoveObserver(this);
++  }
++}
 +
 +int HeliumWorkspaceController::Snapshot::TabCount() const {
 +  int count = static_cast<int>(flat_tabs.size());
@@ -1555,7 +2431,45 @@
 +  if (!profile || profile->IsOffTheRecord() || profile->IsGuestSession()) {
 +    return false;
 +  }
-+  return pref_service_->GetBoolean(prefs::kHeliumWorkspacesEnabled);
++  if (!pref_service_->GetBoolean(prefs::kHeliumWorkspacesEnabled)) {
++    return false;
++  }
++  return IsWorkspaceOwner();
++}
++
++bool HeliumWorkspaceController::IsWorkspaceOwner() const {
++  if (!browser_) {
++    return false;
++  }
++  GlobalBrowserCollection* collection =
++      GlobalBrowserCollection::GetInstance();
++  if (!collection) {
++    return true;
++  }
++  Profile* profile = browser_->GetProfile();
++  bool is_owner = true;
++  collection->ForEach(
++      [&](BrowserWindowInterface* candidate) {
++        if (candidate == browser_) {
++          return false;
++        }
++        if (!candidate || candidate->GetProfile() != profile) {
++          return true;
++        }
++        if (candidate->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
++          return true;
++        }
++        Profile* candidate_profile = candidate->GetProfile();
++        if (!candidate_profile || candidate_profile->IsOffTheRecord() ||
++            candidate_profile->IsGuestSession()) {
++          return true;
++        }
++        // An earlier normal window for this profile owns the workspaces.
++        is_owner = false;
++        return false;
++      },
++      BrowserCollection::Order::kCreation);
++  return is_owner;
 +}
 +
 +std::vector<HeliumWorkspaceController::WorkspaceEntry>
@@ -1569,12 +2483,21 @@
 +    return entries;
 +  }
 +  TabStripModel* tab_strip = GetTabStripModel();
-+  const int live_count = tab_strip ? tab_strip->count() : 0;
++  int live_count = 0;
++  if (tab_strip) {
++    for (int i = 0; i < tab_strip->count(); ++i) {
++      // Pinned tabs are universal, so they do not count as workspace content.
++      if (!tab_strip->IsTabPinned(i)) {
++        ++live_count;
++      }
++    }
++  }
 +  for (const auto& info : service->ListWorkspaces()) {
 +    WorkspaceEntry entry;
 +    entry.id = info.id;
 +    entry.name = info.name;
 +    entry.active = info.id == active_id_;
++    entry.color = info.color;
 +    if (entry.active) {
 +      entry.tab_count = live_count;
 +    } else if (auto it = snapshots_.find(info.id); it != snapshots_.end()) {
@@ -1585,6 +2508,68 @@
 +    entries.push_back(std::move(entry));
 +  }
 +  return entries;
++}
++
++std::vector<HeliumWorkspaceController::SwitcherTab>
++HeliumWorkspaceController::GetLoadedTabs() const {
++  std::vector<SwitcherTab> out;
++  if (!IsAvailable()) {
++    return out;
++  }
++  HeliumWorkspaceService* service = GetService();
++  TabStripModel* tab_strip = GetTabStripModel();
++  if (!service || !tab_strip) {
++    return out;
++  }
++  auto append_snapshot = [&out](const Snapshot& snapshot,
++                                const std::string& id) {
++    for (const auto& item : snapshot.live_items) {
++      if (std::holds_alternative<std::unique_ptr<DetachedTab>>(item)) {
++        tabs::TabInterface* tab =
++            std::get<std::unique_ptr<DetachedTab>>(item)->tab.get();
++        if (tab && tab->GetContents()) {
++          out.push_back({tab->GetContents(), id, false});
++        }
++        continue;
++      }
++      ForEachDetachedTab(
++          *std::get<std::unique_ptr<DetachedTabCollection>>(item),
++          [&out, &id](tabs::TabInterface* tab) {
++            if (tab && tab->GetContents()) {
++              out.push_back({tab->GetContents(), id, false});
++            }
++          });
++    }
++    for (const auto& flat : snapshot.flat_tabs) {
++      if (flat.model && flat.model->GetContents()) {
++        out.push_back({flat.model->GetContents(), id, false});
++      }
++    }
++  };
++
++  // The active workspace's tabs are in the strip, in strip order.
++  for (int i = 0; i < tab_strip->count(); ++i) {
++    if (content::WebContents* contents = tab_strip->GetWebContentsAt(i)) {
++      out.push_back({contents, active_id_, true});
++    }
++  }
++  // Then every other workspace that is already loaded, in workspace order.
++  for (const auto& info : service->ListWorkspaces()) {
++    if (info.id == active_id_) {
++      continue;
++    }
++    if (auto it = snapshots_.find(info.id); it != snapshots_.end()) {
++      append_snapshot(it->second, info.id);
++    }
++    if (auto it = pending_moves_.find(info.id); it != pending_moves_.end()) {
++      for (const auto& flat : it->second.tabs) {
++        if (flat.model && flat.model->GetContents()) {
++          out.push_back({flat.model->GetContents(), info.id, false});
++        }
++      }
++    }
++  }
++  return out;
 +}
 +
 +bool HeliumWorkspaceController::SwitchToWorkspace(const std::string& id) {
@@ -1598,6 +2583,11 @@
 +    return false;
 +  }
 +
++  // Unload workspaces that have been idle for a long time before switching;
++  // the visual tab switcher is not open at this point, so no raw pointers to
++  // those tabs remain.
++  MaybeDiscardInactiveWorkspaces(id);
++
 +  // Persist what is visible now before hiding it.
 +  SaveActiveWorkspace();
 +
@@ -1605,13 +2595,23 @@
 +    Snapshot snapshot = std::move(it->second);
 +    snapshots_.erase(it);
 +    // Capture the source tabs by identity: inserting the replacement below
-+    // may shift their positions.
++    // may shift their positions. Pinned tabs stay visible in every workspace.
 +    std::vector<tabs::TabInterface*> source_tabs;
++    bool has_pinned_tabs = false;
 +    for (int i = 0; i < tab_strip->count(); ++i) {
-+      source_tabs.push_back(tab_strip->GetTabAtIndex(i));
++      if (tab_strip->IsTabPinned(i)) {
++        has_pinned_tabs = true;
++      } else {
++        source_tabs.push_back(tab_strip->GetTabAtIndex(i));
++      }
++    }
++    // An empty target plus no shared pinned tabs would leave the strip empty
++    // (closing the window), so give the new workspace a fresh tab.
++    if (snapshot.TabCount() == 0 && !has_pinned_tabs) {
++      chrome::NewTab(browser_, NewTabTypes::kNewTabCommand);
 +    }
 +    InsertSnapshot(std::move(snapshot));
-+    snapshots_[active_id_] = DetachVisibleTabs(source_tabs);
++    ParkSnapshot(active_id_, DetachVisibleTabs(source_tabs));
 +    active_id_ = id;
 +    service->SetActiveWorkspaceId(id);
 +    NotifyChanged();
@@ -1656,12 +2656,22 @@
 +  }
 +  // Open the new workspace's first tab first so detaching never empties the
 +  // strip (which would close the window). The new tab stays visible; the
-+  // previous tabs (everything before it) are parked under the old workspace.
++  // previous workspace's unpinned tabs are parked under the old workspace.
++  // Pinned tabs belong to every workspace and stay visible.
 +  std::vector<tabs::TabInterface*> source_tabs;
++  int old_active_index = 0;
++  int unpinned_position = 0;
++  const int live_active_index = tab_strip->active_index();
 +  for (int i = 0; i < tab_strip->count(); ++i) {
++    if (tab_strip->IsTabPinned(i)) {
++      continue;
++    }
 +    source_tabs.push_back(tab_strip->GetTabAtIndex(i));
++    if (i == live_active_index) {
++      old_active_index = unpinned_position;
++    }
++    ++unpinned_position;
 +  }
-+  const int old_active_index = tab_strip->active_index();
 +  SaveActiveWorkspace();
 +  chrome::NewTab(browser_, NewTabTypes::kNewTabCommand);
 +  Snapshot parked = DetachVisibleTabs(source_tabs);
@@ -1697,6 +2707,64 @@
 +  return true;
 +}
 +
++bool HeliumWorkspaceController::SetWorkspaceColor(
++    const std::string& id,
++    tab_groups::TabGroupColorId color) {
++  if (!IsAvailable() || id.empty()) {
++    return false;
++  }
++  HeliumWorkspaceService* service = GetService();
++  if (!service || !service->SetWorkspaceColor(id, color)) {
++    return false;
++  }
++  NotifyChanged();
++  return true;
++}
++
++bool HeliumWorkspaceController::ReorderWorkspace(const std::string& id,
++                                                int new_index) {
++  if (!IsAvailable() || id.empty()) {
++    return false;
++  }
++  HeliumWorkspaceService* service = GetService();
++  if (!service || !service->ReorderWorkspace(id, new_index)) {
++    return false;
++  }
++  NotifyChanged();
++  return true;
++}
++
++bool HeliumWorkspaceController::SwitchToAdjacentWorkspace(int delta) {
++  if (!IsAvailable() || delta == 0) {
++    return false;
++  }
++  HeliumWorkspaceService* service = GetService();
++  if (!service) {
++    return false;
++  }
++  const std::vector<HeliumWorkspaceService::WorkspaceInfo> workspaces =
++      service->ListWorkspaces();
++  if (workspaces.size() < 2) {
++    return false;
++  }
++  int current = -1;
++  for (size_t i = 0; i < workspaces.size(); ++i) {
++    if (workspaces[i].id == active_id_) {
++      current = static_cast<int>(i);
++      break;
++    }
++  }
++  if (current < 0) {
++    return false;
++  }
++  const int count = static_cast<int>(workspaces.size());
++  const int target = ((current + delta) % count + count) % count;
++  if (target == current) {
++    return false;
++  }
++  return SwitchToWorkspace(workspaces[target].id);
++}
++
 +bool HeliumWorkspaceController::DeleteWorkspace(const std::string& id) {
 +  if (!IsAvailable() || id.empty()) {
 +    return false;
@@ -1719,15 +2787,96 @@
 +        break;
 +      }
 +    }
-+    if (fallback.empty() || !SwitchToWorkspace(fallback)) {
++    if (fallback.empty()) {
++      return false;
++    }
++    // The fallback may have to load from disk. Remember the workspace being
++    // deleted so the parked tabs are destroyed when the switch completes
++    // instead of staying hidden in memory until the window closes.
++    pending_delete_id_ = id;
++    if (!SwitchToWorkspace(fallback)) {
++      pending_delete_id_.reset();
 +      return false;
 +    }
 +  }
 +  snapshots_.erase(id);
 +  pending_moves_.erase(id);
++  parked_at_.erase(id);
 +  service->DeleteWorkspace(id);
 +  NotifyChanged();
 +  return true;
++}
++
++bool HeliumWorkspaceController::CloseParkedTab(
++    content::WebContents* contents) {
++  if (!IsAvailable() || !contents) {
++    return false;
++  }
++  auto remove_from_snapshot = [&](Snapshot* snapshot) {
++    for (auto it = snapshot->live_items.begin();
++         it != snapshot->live_items.end(); ++it) {
++      if (std::holds_alternative<std::unique_ptr<DetachedTab>>(*it)) {
++        const auto& detached = std::get<std::unique_ptr<DetachedTab>>(*it);
++        if (detached->tab && detached->tab->GetContents() == contents) {
++          snapshot->live_items.erase(it);
++          return true;
++        }
++        continue;
++      }
++      auto& collection =
++          std::get<std::unique_ptr<DetachedTabCollection>>(*it);
++      tabs::TabInterface* target = nullptr;
++      ForEachDetachedTab(*collection, [&](tabs::TabInterface* tab) {
++        if (tab->GetContents() == contents) {
++          target = tab;
++        }
++      });
++      if (!target) {
++        continue;
++      }
++      tabs::TabCollection* inner =
++          collection->collection_.index() == 0
++              ? static_cast<tabs::TabCollection*>(
++                    std::get<std::unique_ptr<tabs::TabGroupTabCollection>>(
++                        collection->collection_)
++                        .get())
++              : static_cast<tabs::TabCollection*>(
++                    std::get<std::unique_ptr<tabs::SplitTabCollection>>(
++                        collection->collection_)
++                        .get());
++      auto removed = inner->MaybeRemoveTab(target);
++      (void)removed;
++      if (CountDetachedCollection(*collection) == 0) {
++        snapshot->live_items.erase(it);
++      }
++      return true;
++    }
++    for (auto it = snapshot->flat_tabs.begin();
++         it != snapshot->flat_tabs.end(); ++it) {
++      if (it->model && it->model->GetContents() == contents) {
++        snapshot->flat_tabs.erase(it);
++        return true;
++      }
++    }
++    return false;
++  };
++  for (auto& [id, snapshot] : snapshots_) {
++    if (remove_from_snapshot(&snapshot)) {
++      SaveSnapshot(id);
++      NotifyChanged();
++      return true;
++    }
++  }
++  for (auto& [id, pending] : pending_moves_) {
++    for (auto it = pending.tabs.begin(); it != pending.tabs.end(); ++it) {
++      if (it->model && it->model->GetContents() == contents) {
++        pending.tabs.erase(it);
++        NotifyChanged();
++        return true;
++      }
++    }
++  }
++  return false;
 +}
 +
 +bool HeliumWorkspaceController::MoveTabsToWorkspace(const std::string& id,
@@ -1761,6 +2910,7 @@
 +    // state when it loads instead of clobbering it.
 +    PendingMove pending;
 +    pending.visuals = std::move(detached->visuals);
++    pending.split_visuals = std::move(detached->split_visuals);
 +    pending.tabs = std::move(detached->tabs);
 +    pending_moves_[id] = std::move(pending);
 +    load_in_flight_ = true;
@@ -1776,9 +2926,17 @@
 +  for (const auto& visuals : detached->visuals) {
 +    target.group_visuals.push_back(visuals);
 +  }
++  const int split_slot_offset =
++      static_cast<int>(target.split_visuals.size());
++  for (const auto& visuals : detached->split_visuals) {
++    target.split_visuals.push_back(visuals);
++  }
 +  for (auto& tab : detached->tabs) {
 +    if (tab.group_slot.has_value()) {
 +      tab.group_slot = tab.group_slot.value() + slot_offset;
++    }
++    if (tab.split_slot.has_value()) {
++      tab.split_slot = tab.split_slot.value() + split_slot_offset;
 +    }
 +    target.flat_tabs.push_back(std::move(tab));
 +  }
@@ -1830,6 +2988,7 @@
 +  service->SaveWorkspace(id, name, {}, /*tab_count=*/0);
 +  Snapshot& target = snapshots_[id];
 +  target.group_visuals = std::move(detached->visuals);
++  target.split_visuals = std::move(detached->split_visuals);
 +  target.flat_tabs = std::move(detached->tabs);
 +  SaveSnapshot(id);
 +  NotifyChanged();
@@ -1846,6 +3005,13 @@
 +      std::remove_if(indices.begin(), indices.end(),
 +                     [&](int i) { return i < 0 || i >= tab_strip->count(); }),
 +      indices.end());
++  // Pinned tabs are universal and stay in the strip; they cannot be moved
++  // between workspaces.
++  indices.erase(std::remove_if(indices.begin(), indices.end(),
++                               [&](int i) {
++                                 return tab_strip->IsTabPinned(i);
++                               }),
++                indices.end());
 +  if (indices.empty()) {
 +    return std::nullopt;
 +  }
@@ -1863,9 +3029,9 @@
 +  // (whole moved groups keep their visuals; partial moves become ungrouped).
 +  DetachedSelection out;
 +  std::map<tab_groups::TabGroupId, int> slots;
++  std::map<split_tabs::SplitTabId, int> split_slots;
 +  std::sort(indices.begin(), indices.end(), std::greater<int>());
 +  for (int tab_index : indices) {
-+    const bool pinned = tab_strip->IsTabPinned(tab_index);
 +    std::optional<int> slot;
 +    if (std::optional<tab_groups::TabGroupId> group =
 +            tab_strip->GetTabGroupForTab(tab_index);
@@ -1886,8 +3052,26 @@
 +      }
 +      slot = inserted.first->second;
 +    }
++    std::optional<int> split_slot;
++    if (std::optional<split_tabs::SplitTabId> split =
++            tab_strip->GetSplitForTab(tab_index);
++        split.has_value()) {
++      auto inserted = split_slots.try_emplace(split.value(), -1);
++      if (inserted.second) {
++        inserted.first->second =
++            static_cast<int>(out.split_visuals.size());
++        if (const split_tabs::SplitTabData* live_split =
++                tab_strip->GetSplitData(split.value())) {
++          out.split_visuals.push_back(*live_split->visual_data());
++        } else {
++          out.split_visuals.emplace_back();
++        }
++      }
++      split_slot = inserted.first->second;
++    }
 +    out.tabs.push_back(FlatTab{
-+        tab_strip->DetachTabAtForInsertion(tab_index), pinned, slot});
++        tab_strip->DetachTabAtForInsertion(tab_index), /*pinned=*/false,
++        slot, split_slot});
 +  }
 +  std::reverse(out.tabs.begin(), out.tabs.end());
 +  return out;
@@ -1901,6 +3085,90 @@
 +base::WeakPtr<HeliumWorkspaceController>
 +HeliumWorkspaceController::GetWeakPtr() {
 +  return weak_factory_.GetWeakPtr();
++}
++
++void HeliumWorkspaceController::FlushSave() {
++  autosave_timer_.Stop();
++  SaveActiveWorkspace();
++}
++
++void HeliumWorkspaceController::ScheduleAutosave() {
++  if (!IsAvailable() || active_id_.empty()) {
++    return;
++  }
++  autosave_timer_.Start(
++      FROM_HERE, base::Seconds(1),
++      base::BindOnce(&HeliumWorkspaceController::SaveActiveWorkspace,
++                     base::Unretained(this)));
++}
++
++void HeliumWorkspaceController::OnTabStripModelChanged(
++    TabStripModel* model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  // Selection changes do not alter the saved tab set. Everything else
++  // (open/close/move/pin/group) does, and is coalesced by the timer.
++  if (change.type() == TabStripModelChange::kSelectionOnly) {
++    return;
++  }
++  ScheduleAutosave();
++}
++
++void HeliumWorkspaceController::OnTabStripModelDestroyed(TabStripModel* model) {
++  autosave_timer_.Stop();
++}
++
++void HeliumWorkspaceController::OnBrowserCreated(
++    BrowserWindowInterface* browser) {
++  OnWindowSetChanged();
++}
++
++void HeliumWorkspaceController::OnBrowserClosed(BrowserWindowInterface* browser) {
++  OnWindowSetChanged();
++}
++
++void HeliumWorkspaceController::OnWindowSetChanged() {
++  if (!IsAvailable()) {
++    return;
++  }
++  if (!ever_available_) {
++    // Workspaces just became available here because the previous owner
++    // closed. Keep this window's current tabs in their own workspace so the
++    // closed window's saved tabs are not overwritten.
++    ever_available_ = true;
++    EnsureWorkspaces();
++    AdoptVisibleTabsAsNewWorkspace();
++    NotifyChanged();
++    return;
++  }
++  EnsureWorkspaces();
++  NotifyChanged();
++}
++
++void HeliumWorkspaceController::AdoptVisibleTabsAsNewWorkspace() {
++  HeliumWorkspaceService* service = GetService();
++  TabStripModel* tab_strip = GetTabStripModel();
++  if (!service || !tab_strip || tab_strip->count() == 0) {
++    return;
++  }
++  const std::string id = base::UnguessableToken::Create().ToString();
++  std::string name = "Workspace";
++  int suffix = static_cast<int>(service->ListWorkspaces().size()) + 1;
++  auto name_taken = [&](const std::string& candidate) {
++    for (const auto& info : service->ListWorkspaces()) {
++      if (info.name == candidate) {
++        return true;
++      }
++    }
++    return false;
++  };
++  while (name_taken(name)) {
++    name = "Workspace " + base::NumberToString(suffix++);
++  }
++  service->SaveWorkspace(id, name, {}, tab_strip->count());
++  active_id_ = id;
++  service->SetActiveWorkspaceId(id);
++  SaveActiveWorkspace();
 +}
 +
 +HeliumWorkspaceService* HeliumWorkspaceController::GetService() const {
@@ -1937,6 +3205,7 @@
 +
 +void HeliumWorkspaceController::OnEnabledPrefChanged() {
 +  if (IsAvailable()) {
++    ever_available_ = true;
 +    EnsureWorkspaces();
 +    NotifyChanged();
 +    return;
@@ -1953,6 +3222,7 @@
 +  }
 +  snapshots_.clear();
 +  pending_moves_.clear();
++  parked_at_.clear();
 +  NotifyChanged();
 +}
 +
@@ -1962,7 +3232,8 @@
 +  if (!service || !tab_strip || active_id_.empty()) {
 +    return;
 +  }
-+  HeliumSerializedWorkspace serialized = SerializeLiveTabStrip(tab_strip);
++  HeliumSerializedWorkspace serialized =
++      SerializeLiveTabStrip(tab_strip, /*include_pinned=*/false);
 +  const int tab_count = static_cast<int>(serialized.tabs.size());
 +  service->SaveWorkspace(active_id_, service->GetWorkspaceName(active_id_),
 +                         BuildWorkspaceCommands(serialized), tab_count);
@@ -1985,16 +3256,27 @@
 +    group.visual_data = visuals;
 +    serialized.groups.push_back(std::move(group));
 +  }
++  serialized.splits.reserve(snapshot.split_visuals.size());
++  for (const auto& visuals : snapshot.split_visuals) {
++    HeliumSerializedWorkspace::Split split;
++    split.visual_data = visuals;
++    serialized.splits.push_back(std::move(split));
++  }
 +  serialized.active_index =
 +      std::clamp(snapshot.active_index, 0,
 +                 std::max(0, snapshot.TabCount() - 1));
 +  auto push_tab = [&](content::WebContents* contents, bool pinned,
-+                      std::optional<int> slot) {
++                      std::optional<int> slot,
++                      std::optional<int> split_slot) {
 +    HeliumSerializedWorkspace::Tab out;
 +    out.pinned = pinned;
 +    if (slot.has_value() && slot.value() >= 0 &&
 +        static_cast<size_t>(slot.value()) < serialized.groups.size()) {
 +      out.group_slot = slot;
++    }
++    if (split_slot.has_value() && split_slot.value() >= 0 &&
++        static_cast<size_t>(split_slot.value()) < serialized.splits.size()) {
++      out.split_slot = split_slot;
 +    }
 +    if (contents) {
 +      auto& controller = contents->GetController();
@@ -2015,6 +3297,27 @@
 +    }
 +    serialized.tabs.push_back(std::move(out));
 +  };
++  std::map<const tabs::TabCollection*, int> live_split_slots;
++  auto split_slot_for = [&](const DetachedTabCollection& collection)
++      -> std::optional<int> {
++    if (collection.collection_.index() != 1) {
++      return std::nullopt;
++    }
++    const auto& split =
++        std::get<std::unique_ptr<tabs::SplitTabCollection>>(
++            collection.collection_);
++    auto inserted =
++        live_split_slots.try_emplace(split.get(), -1);
++    if (inserted.second) {
++      inserted.first->second = static_cast<int>(serialized.splits.size());
++      HeliumSerializedWorkspace::Split serialized_split;
++      if (split->data() && split->data()->visual_data()) {
++        serialized_split.visual_data = *split->data()->visual_data();
++      }
++      serialized.splits.push_back(std::move(serialized_split));
++    }
++    return inserted.first->second;
++  };
 +  for (const auto& item : snapshot.live_items) {
 +    if (std::holds_alternative<std::unique_ptr<DetachedTab>>(item)) {
 +      const auto& detached =
@@ -2027,12 +3330,12 @@
 +          slot = slot_it->second;
 +        }
 +      }
-+      push_tab(tab->GetContents(),
-+               detached->was_pinned_at_time_of_removal, slot);
++      push_tab(tab->GetContents(), /*pinned=*/false, slot, std::nullopt);
 +      continue;
 +    }
 +    const auto& collection =
 +        std::get<std::unique_ptr<DetachedTabCollection>>(item);
++    const std::optional<int> split_slot = split_slot_for(*collection);
 +    ForEachDetachedTab(*collection, [&](tabs::TabInterface* tab) {
 +      std::optional<int> slot;
 +      if (auto group = tab->GetGroup(); group.has_value()) {
@@ -2041,7 +3344,7 @@
 +          slot = slot_it->second;
 +        }
 +      }
-+      push_tab(tab->GetContents(), collection->pinned_, slot);
++      push_tab(tab->GetContents(), /*pinned=*/false, slot, split_slot);
 +    });
 +  }
 +  for (const auto& flat : snapshot.flat_tabs) {
@@ -2051,8 +3354,15 @@
 +         static_cast<size_t>(slot.value()) >= serialized.groups.size())) {
 +      slot = std::nullopt;
 +    }
-+    push_tab(flat.model ? flat.model->GetContents() : nullptr, flat.pinned,
-+             slot);
++    std::optional<int> split_slot = flat.split_slot;
++    if (split_slot.has_value() &&
++        (split_slot.value() < 0 ||
++         static_cast<size_t>(split_slot.value()) >=
++             serialized.splits.size())) {
++      split_slot = std::nullopt;
++    }
++    push_tab(flat.model ? flat.model->GetContents() : nullptr,
++             /*pinned=*/false, slot, split_slot);
 +  }
 +  const int tab_count = static_cast<int>(serialized.tabs.size());
 +  service->SaveWorkspace(id, service->GetWorkspaceName(id),
@@ -2072,7 +3382,7 @@
 +  std::vector<int> indices;
 +  for (tabs::TabInterface* tab : tabs_to_detach) {
 +    const int index = tab_strip->GetIndexOfTab(tab);
-+    if (index != TabStripModel::kNoTab) {
++    if (index != TabStripModel::kNoTab && !tab_strip->IsTabPinned(index)) {
 +      indices.push_back(index);
 +    }
 +  }
@@ -2110,6 +3420,73 @@
 +  return snapshot;
 +}
 +
++void HeliumWorkspaceController::ParkSnapshot(const std::string& id,
++                                             Snapshot snapshot) {
++  if (pending_delete_id_.has_value() && pending_delete_id_.value() == id) {
++    // The workspace was deleted while its tabs were still visible; let the
++    // snapshot (and the tabs it owns) be destroyed instead of parking them.
++    pending_delete_id_.reset();
++    return;
++  }
++  if (snapshot.TabCount() == 0) {
++    parked_at_.erase(id);
++  } else {
++    parked_at_[id] = base::TimeTicks::Now();
++  }
++  snapshots_[id] = std::move(snapshot);
++}
++
++void HeliumWorkspaceController::MaybeDiscardInactiveWorkspaces(
++    const std::string& target_id) {
++  // Keep recently used workspaces resident; older ones are reloaded from
++  // disk the next time they are opened. 30 minutes keeps the common
++  // back-and-forth case fast without letting memory grow forever.
++  constexpr base::TimeDelta kIdleTimeout = base::Minutes(30);
++  const base::TimeTicks cutoff = base::TimeTicks::Now() - kIdleTimeout;
++  for (auto it = snapshots_.begin(); it != snapshots_.end();) {
++    const std::string& id = it->first;
++    if (id == active_id_ || id == target_id) {
++      ++it;
++      continue;
++    }
++    auto parked = parked_at_.find(id);
++    if (parked == parked_at_.end() || parked->second > cutoff) {
++      ++it;
++      continue;
++    }
++    bool discardable = true;
++    auto check_tab = [&](tabs::TabInterface* tab) {
++      content::WebContents* contents = tab ? tab->GetContents() : nullptr;
++      if (!contents || contents->IsCurrentlyAudible() ||
++          contents->IsBeingCaptured() ||
++          contents->NeedToFireBeforeUnloadOrUnloadEvents()) {
++        discardable = false;
++      }
++    };
++    for (const auto& item : it->second.live_items) {
++      if (std::holds_alternative<std::unique_ptr<DetachedTab>>(item)) {
++        check_tab(std::get<std::unique_ptr<DetachedTab>>(item)->tab.get());
++      } else {
++        ForEachDetachedTab(
++            *std::get<std::unique_ptr<DetachedTabCollection>>(item),
++            [&](tabs::TabInterface* tab) { check_tab(tab); });
++      }
++    }
++    for (const auto& flat : it->second.flat_tabs) {
++      check_tab(flat.model.get());
++    }
++    if (!discardable) {
++      ++it;
++      continue;
++    }
++    // Persist the current state, then drop the live WebContents. The next
++    // switch materializes them from disk (tabs reload, like a discarded tab).
++    SaveSnapshot(id);
++    parked_at_.erase(parked);
++    it = snapshots_.erase(it);
++  }
++}
++
 +void HeliumWorkspaceController::InsertSnapshot(Snapshot snapshot) {
 +  TabStripModel* tab_strip = GetTabStripModel();
 +  if (!tab_strip || tab_strip->count() == 0 ||
@@ -2124,11 +3501,10 @@
 +  for (auto& item : snapshot.live_items) {
 +    if (std::holds_alternative<std::unique_ptr<DetachedTab>>(item)) {
 +      auto& detached = std::get<std::unique_ptr<DetachedTab>>(item);
-+      const int add_types = detached->was_pinned_at_time_of_removal
-+                                ? ADD_PINNED
-+                                : ADD_NONE;
++      // Pinned tabs are universal: legacy snapshots that still contain them
++      // come back as regular tabs so the visible pinned set never duplicates.
 +      const int inserted = tab_strip->InsertDetachedTabAt(
-+          insert_position, std::move(detached->tab), add_types,
++          insert_position, std::move(detached->tab), ADD_NONE,
 +          /*group=*/std::nullopt);
 +      if (original_position == snapshot.active_index) {
 +        new_active_index = inserted;
@@ -2139,7 +3515,6 @@
 +    }
 +    auto& collection = std::get<std::unique_ptr<DetachedTabCollection>>(item);
 +    const int collection_count = CountDetachedCollection(*collection);
-+    const bool pinned = collection->pinned_;
 +    std::optional<tab_groups::TabGroupId> group;
 +    ForEachDetachedTab(*collection, [&](tabs::TabInterface* tab) {
 +      if (!group.has_value()) {
@@ -2152,7 +3527,8 @@
 +                                          insert_position)
 +                                    : tab_strip->InsertDetachedSplitTabAt(
 +                                          std::move(collection),
-+                                          insert_position, pinned, group);
++                                          insert_position, /*pinned=*/false,
++                                          group);
 +    if (snapshot.active_index >= original_position &&
 +        snapshot.active_index < original_position + collection_count) {
 +      new_active_index =
@@ -2163,15 +3539,22 @@
 +  }
 +  // Then flat (disk-materialized or moved) tabs, regrouped by slot.
 +  std::map<int, std::vector<int>> slot_indices;
++  std::map<int, std::vector<tabs::TabInterface*>> split_tabs;
 +  for (auto& flat : snapshot.flat_tabs) {
-+    const int add_types = flat.pinned ? ADD_PINNED : ADD_NONE;
 +    const int inserted = tab_strip->InsertDetachedTabAt(
-+        insert_position, std::move(flat.model), add_types,
++        insert_position, std::move(flat.model), ADD_NONE,
 +        /*group=*/std::nullopt);
 +    if (flat.group_slot.has_value() && flat.group_slot.value() >= 0 &&
 +        static_cast<size_t>(flat.group_slot.value()) <
 +            snapshot.group_visuals.size()) {
 +      slot_indices[flat.group_slot.value()].push_back(inserted);
++    }
++    if (flat.split_slot.has_value() && flat.split_slot.value() >= 0 &&
++        static_cast<size_t>(flat.split_slot.value()) <
++            snapshot.split_visuals.size()) {
++      if (tabs::TabInterface* tab = tab_strip->GetTabAtIndex(inserted)) {
++        split_tabs[flat.split_slot.value()].push_back(tab);
++      }
 +    }
 +    if (original_position == snapshot.active_index) {
 +      new_active_index = inserted;
@@ -2187,6 +3570,25 @@
 +        tab_strip->AddToNewGroup(indices);
 +    tab_strip->ChangeTabGroupVisuals(new_group,
 +                                     snapshot.group_visuals[slot]);
++  }
++  // Restore split views last, once grouping has settled the final indices.
++  for (auto& [slot, members] : split_tabs) {
++    if (members.size() != 2) {
++      continue;
++    }
++    std::vector<int> indices;
++    for (tabs::TabInterface* tab : members) {
++      const int index = tab_strip->GetIndexOfTab(tab);
++      if (index >= 0) {
++        indices.push_back(index);
++      }
++    }
++    if (indices.size() != 2) {
++      continue;
++    }
++    std::sort(indices.begin(), indices.end());
++    tab_strip->RestoreSplit(split_tabs::SplitTabId::GenerateNew(), indices,
++                            snapshot.split_visuals[slot]);
 +  }
 +  if (new_active_index >= 0 && new_active_index < tab_strip->count()) {
 +    tab_strip->ActivateTabAt(new_active_index);
@@ -2205,6 +3607,10 @@
 +  snapshot.group_visuals.reserve(parsed->groups.size());
 +  for (const auto& group : parsed->groups) {
 +    snapshot.group_visuals.push_back(group.visual_data);
++  }
++  snapshot.split_visuals.reserve(parsed->splits.size());
++  for (const auto& split : parsed->splits) {
++    snapshot.split_visuals.push_back(split.visual_data);
 +  }
 +  snapshot.active_index = parsed->active_index;
 +  for (const auto& tab : parsed->tabs) {
@@ -2228,8 +3634,16 @@
 +                                      &entries);
 +    auto model = std::make_unique<tabs::TabModel>(std::move(contents),
 +                                                 tab_strip);
-+    snapshot.flat_tabs.push_back(
-+        FlatTab{std::move(model), tab.pinned, tab.group_slot});
++    // Pinned tabs are universal and live in the strip; older builds saved
++    // them per workspace, so restore those as regular tabs instead.
++    std::optional<int> split_slot;
++    if (tab.split_slot.has_value() && tab.split_slot.value() >= 0 &&
++        static_cast<size_t>(tab.split_slot.value()) <
++            snapshot.split_visuals.size()) {
++      split_slot = tab.split_slot;
++    }
++    snapshot.flat_tabs.push_back(FlatTab{std::move(model), /*pinned=*/false,
++                                         tab.group_slot, split_slot});
 +  }
 +  return snapshot;
 +}
@@ -2268,25 +3682,44 @@
 +    for (const auto& visuals : pending.visuals) {
 +      snapshot.group_visuals.push_back(visuals);
 +    }
++    const int split_slot_offset =
++        static_cast<int>(snapshot.split_visuals.size());
++    for (const auto& visuals : pending.split_visuals) {
++      snapshot.split_visuals.push_back(visuals);
++    }
 +    for (auto& flat : pending.tabs) {
 +      if (flat.group_slot.has_value()) {
 +        flat.group_slot = flat.group_slot.value() + slot_offset;
++      }
++      if (flat.split_slot.has_value()) {
++        flat.split_slot = flat.split_slot.value() + split_slot_offset;
 +      }
 +      snapshot.flat_tabs.push_back(std::move(flat));
 +    }
 +  }
 +  if (snapshot.TabCount() == 0) {
 +    if (!is_switch) {
++      // Keep an empty in-memory entry so later moves have a target.
++      snapshots_[id] = Snapshot();
++      NotifyChanged();
 +      return;
 +    }
-+    // Broken or empty saved data recovers to a single fresh tab, never a
-+    // crash and never an empty strip.
++    // A workspace can legitimately have no unpinned tabs (everything was
++    // moved away); the shared pinned tabs keep the strip alive. Only a strip
++    // with no pinned tabs needs a replacement tab before switching.
 +    std::vector<tabs::TabInterface*> source_tabs;
++    bool has_pinned_tabs = false;
 +    for (int i = 0; i < tab_strip->count(); ++i) {
-+      source_tabs.push_back(tab_strip->GetTabAtIndex(i));
++      if (tab_strip->IsTabPinned(i)) {
++        has_pinned_tabs = true;
++      } else {
++        source_tabs.push_back(tab_strip->GetTabAtIndex(i));
++      }
 +    }
-+    chrome::NewTab(browser_, NewTabTypes::kNewTabCommand);
-+    snapshots_[active_id_] = DetachVisibleTabs(source_tabs);
++    if (!has_pinned_tabs) {
++      chrome::NewTab(browser_, NewTabTypes::kNewTabCommand);
++    }
++    ParkSnapshot(active_id_, DetachVisibleTabs(source_tabs));
 +    active_id_ = id;
 +    service->SetActiveWorkspaceId(id);
 +    NotifyChanged();
@@ -2302,10 +3735,12 @@
 +  snapshots_.erase(id);
 +  std::vector<tabs::TabInterface*> source_tabs;
 +  for (int i = 0; i < tab_strip->count(); ++i) {
-+    source_tabs.push_back(tab_strip->GetTabAtIndex(i));
++    if (!tab_strip->IsTabPinned(i)) {
++      source_tabs.push_back(tab_strip->GetTabAtIndex(i));
++    }
 +  }
 +  InsertSnapshot(std::move(to_insert));
-+  snapshots_[active_id_] = DetachVisibleTabs(source_tabs);
++  ParkSnapshot(active_id_, DetachVisibleTabs(source_tabs));
 +  active_id_ = id;
 +  service->SetActiveWorkspaceId(id);
 +  NotifyChanged();
@@ -2469,7 +3904,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.h
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,61 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -2513,6 +3948,10 @@
 + private:
 +  class WorkspaceItemView;
 +
++  // Handles a finished drag of a workspace dot: |id| should move to the
++  // position under |screen_point|.
++  void OnItemDragged(const std::string& id, const gfx::Point& screen_point);
++
 +  void Refresh();
 +  void ScheduleRefresh();
 +  int ItemsPerRow() const;
@@ -2530,7 +3969,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.cc
-@@ -0,0 +1,492 @@
+@@ -0,0 +1,632 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -2549,8 +3988,11 @@
 +#include "chrome/app/vector_icons/vector_icons.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/helium/helium_workspace_controller.h"
++#include "chrome/browser/ui/simple_message_box.h"
++#include "chrome/browser/ui/tabs/tab_group_theme.h"
 +#include "chrome/grit/generated_resources.h"
 +#include "components/strings/grit/components_strings.h"
++#include "components/tab_groups/tab_group_color.h"
 +#include "ui/accessibility/ax_enums.mojom.h"
 +#include "ui/accessibility/ax_node_data.h"
 +#include "ui/base/l10n/l10n_util.h"
@@ -2731,8 +4173,16 @@
 +                    const std::string& id,
 +                    const std::string& name,
 +                    bool active,
-+                    int tab_count)
-+      : browser_(browser), id_(id), active_(active) {
++                    int tab_count,
++                    tab_groups::TabGroupColorId color,
++                    base::RepeatingCallback<void(const std::string&,
++                                                 const gfx::Point&)>
++                        on_drag_finished)
++      : browser_(browser),
++        id_(id),
++        active_(active),
++        color_(color),
++        on_drag_finished_(std::move(on_drag_finished)) {
 +    SetPreferredSize(gfx::Size(kDotHitSize, kDotHitSize));
 +    SetTooltipText(TooltipFor(name, active, tab_count));
 +    GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
@@ -2747,32 +4197,58 @@
 +  void OnPaint(gfx::Canvas* canvas) override {
 +    views::View::OnPaint(canvas);
 +    const gfx::PointF center(GetLocalBounds().CenterPoint());
++    const ui::ColorId color_id =
++        GetTabGroupContextMenuColorId(color_);
 +    cc::PaintFlags flags;
 +    flags.setAntiAlias(true);
 +    if (active_) {
 +      flags.setStyle(cc::PaintFlags::kFill_Style);
-+      flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimary));
++      flags.setColor(GetColorProvider()->GetColor(color_id));
 +      canvas->DrawCircle(center, kDotRadius, flags);
 +    } else {
 +      flags.setStyle(cc::PaintFlags::kStroke_Style);
 +      flags.setStrokeWidth(kDotRingWidth);
-+      flags.setColor(GetColorProvider()->GetColor(ui::kColorSysOutline));
++      flags.setColor(GetColorProvider()->GetColor(color_id));
 +      canvas->DrawCircle(center, kDotRadius, flags);
 +    }
 +  }
 +  bool OnMousePressed(const ui::MouseEvent& event) override {
++    if (event.IsOnlyLeftMouseButton()) {
++      press_point_ = event.location();
++      dragging_ = false;
++    }
 +    return true;
++  }
++  bool OnMouseDragged(const ui::MouseEvent& event) override {
++    if (!event.IsOnlyLeftMouseButton()) {
++      return false;
++    }
++    if (!dragging_ &&
++        (event.location() - press_point_).Length() > kDragThreshold) {
++      dragging_ = true;
++    }
++    return dragging_;
 +  }
 +  void OnMouseReleased(const ui::MouseEvent& event) override {
 +    if (event.IsOnlyRightMouseButton()) {
 +      ShowWorkspaceMenu(event.location());
 +      return;
 +    }
-+    if (event.IsOnlyLeftMouseButton()) {
-+      if (HeliumWorkspaceController* controller =
-+              HeliumWorkspaceController::From(browser_)) {
-+        controller->SwitchToWorkspace(id_);
++    if (!event.IsOnlyLeftMouseButton()) {
++      return;
++    }
++    if (dragging_) {
++      dragging_ = false;
++      gfx::Point screen_point = event.location();
++      ConvertPointToScreen(this, &screen_point);
++      if (!on_drag_finished_.is_null()) {
++        on_drag_finished_.Run(id_, screen_point);
 +      }
++      return;
++    }
++    if (HeliumWorkspaceController* controller =
++            HeliumWorkspaceController::From(browser_)) {
++      controller->SwitchToWorkspace(id_);
 +    }
 +  }
 +  bool OnKeyPressed(const ui::KeyEvent& event) override {
@@ -2787,7 +4263,15 @@
 +    return false;
 +  }
 +  // ui::SimpleMenuModel::Delegate:
-+  bool IsCommandIdChecked(int command_id) const override { return false; }
++  bool IsCommandIdChecked(int command_id) const override {
++    if (command_id >= kColorCommandBase &&
++        command_id < kColorCommandBase +
++                         static_cast<int>(
++                             tab_groups::TabGroupColorId::kNumEntries)) {
++      return command_id - kColorCommandBase == static_cast<int>(color_);
++    }
++    return false;
++  }
 +  bool IsCommandIdEnabled(int command_id) const override {
 +    HeliumWorkspaceController* controller =
 +        HeliumWorkspaceController::From(browser_);
@@ -2796,6 +4280,14 @@
 +    }
 +    if (command_id == kDeleteCommand) {
 +      return controller->GetWorkspaces().size() > 1;
++    }
++    if (command_id == kMoveLeftCommand) {
++      return WorkspaceIndex(controller) > 0;
++    }
++    if (command_id == kMoveRightCommand) {
++      const int index = WorkspaceIndex(controller);
++      return index >= 0 &&
++             index + 1 < static_cast<int>(controller->GetWorkspaces().size());
 +    }
 +    return true;
 +  }
@@ -2842,25 +4334,56 @@
 +              },
 +              weak_controller, id));
 +    } else if (command_id == kDeleteCommand) {
-+      // The menu runner lives on this view, and deleting can rebuild the whole
-+      // switcher. Post so the menu unwinds before anything is destroyed.
++      // Ask first: deleting closes every tab in the workspace.
 +      const std::string id = id_;
 +      base::WeakPtr<HeliumWorkspaceController> weak_controller =
 +          controller->GetWeakPtr();
-+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-+          FROM_HERE,
++      chrome::ShowQuestionMessageBoxAsync(
++          GetWidget() ? GetWidget()->GetNativeWindow() : gfx::NativeWindow(),
++          l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_DELETE_TITLE),
++          l10n_util::GetStringFUTF16(
++              IDS_HELIUM_WORKSPACE_DELETE_BODY,
++              base::UTF8ToUTF16(NameFor(controller, id))),
 +          base::BindOnce(
 +              [](base::WeakPtr<HeliumWorkspaceController> c,
-+                 const std::string& id) {
-+                if (c) {
++                 const std::string& id, chrome::MessageBoxResult result) {
++                if (c && result == chrome::MESSAGE_BOX_RESULT_YES) {
 +                  c->DeleteWorkspace(id);
 +                }
 +              },
 +              weak_controller, id));
++    } else if (command_id == kMoveLeftCommand ||
++               command_id == kMoveRightCommand) {
++      const int index = WorkspaceIndex(controller);
++      if (index >= 0) {
++        controller->ReorderWorkspace(
++            id_, index + (command_id == kMoveLeftCommand ? -1 : 1));
++      }
++    } else if (command_id >= kColorCommandBase &&
++               command_id < kColorCommandBase +
++                                static_cast<int>(
++                                    tab_groups::TabGroupColorId::kNumEntries)) {
++      const auto color =
++          static_cast<tab_groups::TabGroupColorId>(command_id -
++                                                   kColorCommandBase);
++      if (controller->SetWorkspaceColor(id_, color)) {
++        color_ = color;
++        SchedulePaint();
++      }
 +    }
 +  }
 +
 + private:
++  int WorkspaceIndex(HeliumWorkspaceController* controller) const {
++    const auto entries = controller->GetWorkspaces();
++    for (size_t i = 0; i < entries.size(); ++i) {
++      if (entries[i].id == id_) {
++        return static_cast<int>(i);
++      }
++    }
++    return -1;
++  }
++
 +  static std::string NameFor(HeliumWorkspaceController* controller,
 +                             const std::string& id) {
 +    for (const auto& entry : controller->GetWorkspaces()) {
@@ -2877,6 +4400,24 @@
 +        kRenameCommand,
 +        l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_RENAME));
 +    context_menu_model_->AddItem(
++        kMoveLeftCommand,
++        l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_MOVE_LEFT));
++    context_menu_model_->AddItem(
++        kMoveRightCommand,
++        l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_MOVE_RIGHT));
++    color_menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
++    for (const auto& [color, label] :
++         tab_groups::GetTabGroupColorLabelMap()) {
++      color_menu_model_->AddCheckItem(kColorCommandBase +
++                                          static_cast<int>(color),
++                                      label);
++    }
++    context_menu_model_->AddSubMenu(
++        kColorMenuCommand,
++        l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_COLOR),
++        color_menu_model_.get());
++    context_menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
++    context_menu_model_->AddItem(
 +        kDeleteCommand,
 +        l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_DELETE));
 +    context_menu_runner_ = std::make_unique<views::MenuRunner>(
@@ -2892,10 +4433,21 @@
 +
 +  static constexpr int kRenameCommand = 1;
 +  static constexpr int kDeleteCommand = 2;
++  static constexpr int kMoveLeftCommand = 3;
++  static constexpr int kMoveRightCommand = 4;
++  static constexpr int kColorMenuCommand = 5;
++  static constexpr int kColorCommandBase = 100;
++  static constexpr int kDragThreshold = 6;
 +
 +  raw_ptr<BrowserWindowInterface> browser_;
 +  const std::string id_;
 +  bool active_;
++  tab_groups::TabGroupColorId color_;
++  base::RepeatingCallback<void(const std::string&, const gfx::Point&)>
++      on_drag_finished_;
++  gfx::Point press_point_;
++  bool dragging_ = false;
++  std::unique_ptr<ui::SimpleMenuModel> color_menu_model_;
 +  std::unique_ptr<ui::SimpleMenuModel> context_menu_model_;
 +  std::unique_ptr<views::MenuRunner> context_menu_runner_;
 +};
@@ -2944,7 +4496,10 @@
 +  std::vector<std::unique_ptr<views::View>> entries;
 +  for (const auto& entry : controller->GetWorkspaces()) {
 +    auto item = std::make_unique<WorkspaceItemView>(
-+        browser_, entry.id, entry.name, entry.active, entry.tab_count);
++        browser_, entry.id, entry.name, entry.active, entry.tab_count,
++        entry.color,
++        base::BindRepeating(&HeliumWorkspaceSwitcherView::OnItemDragged,
++                            base::Unretained(this)));
 +    items_.push_back(item.get());
 +    entries.push_back(std::move(item));
 +  }
@@ -3005,6 +4560,30 @@
 +
 +void HeliumWorkspaceSwitcherView::OnControllerChanged() {
 +  ScheduleRefresh();
++}
++
++void HeliumWorkspaceSwitcherView::OnItemDragged(
++    const std::string& id,
++    const gfx::Point& screen_point) {
++  HeliumWorkspaceController* controller =
++      HeliumWorkspaceController::From(browser_);
++  if (!controller || !controller->IsAvailable()) {
++    return;
++  }
++  // Find the dot under the cursor. items_ follows workspace order, so the
++  // hit item's position is also the destination index.
++  for (size_t i = 0; i < items_.size(); ++i) {
++    views::View* item = items_[i];
++    if (!item) {
++      continue;
++    }
++    gfx::Point local = screen_point;
++    views::View::ConvertPointFromScreen(item, &local);
++    if (item->GetLocalBounds().Contains(local)) {
++      controller->ReorderWorkspace(id, static_cast<int>(i));
++      return;
++    }
++  }
 +}
 +
 +void HeliumWorkspaceSwitcherView::OnBoundsChanged(
