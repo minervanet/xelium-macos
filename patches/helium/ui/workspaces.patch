@@ -3973,7 +3973,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.h
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,79 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -3995,6 +3995,7 @@
 +class BrowserWindowInterface;
 +
 +namespace views {
++class ImageButton;
 +class ScrollView;
 +}
 +
@@ -4042,6 +4043,7 @@
 +  raw_ptr<BrowserWindowInterface> browser_;
 +  raw_ptr<views::ScrollView> scroll_view_ = nullptr;
 +  raw_ptr<ContentsView> contents_view_ = nullptr;
++  raw_ptr<views::ImageButton> add_button_ = nullptr;
 +  std::vector<raw_ptr<WorkspaceItemView>> items_;
 +  base::CallbackListSubscription controller_subscription_;
 +  std::string last_active_id_;
@@ -4054,7 +4056,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.cc
-@@ -0,0 +1,774 @@
+@@ -0,0 +1,800 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -4601,7 +4603,14 @@
 +HeliumWorkspaceSwitcherView::HeliumWorkspaceSwitcherView(
 +    BrowserWindowInterface* browser)
 +    : browser_(browser) {
-+  SetLayoutManager(std::make_unique<views::FillLayout>());
++  // Dots scroll; the "+" stays pinned after the scroll area so it can never
++  // scroll out of view. The scroll limit is the plus button, not the last dot.
++  auto* layout = static_cast<views::BoxLayout*>(SetLayoutManager(
++      std::make_unique<views::BoxLayout>(
++          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), kDotGap)));
++  layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kStart);
++  layout->set_cross_axis_alignment(
++      views::BoxLayout::CrossAxisAlignment::kCenter);
 +
 +  auto scroll_view = std::make_unique<WorkspaceScrollView>();
 +  // No opaque background: the native frame material must show through.
@@ -4632,7 +4641,36 @@
 +      base::Unretained(this)));
 +  contents_view_ =
 +      scroll_view->SetContents(std::make_unique<ContentsView>());
++  scroll_view->SetProperty(
++      views::kFlexBehaviorKey,
++      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToMinimum,
++                               views::MaximumFlexSizeRule::kUnbounded));
 +  scroll_view_ = AddChildView(std::move(scroll_view));
++
++  // "New workspace" affordance, pinned outside the scroll area. An
++  // ImageButton keeps hover feedback without any opaque fill, so the
++  // translucent frame material shows through.
++  auto add_button = std::make_unique<views::ImageButton>(
++      base::BindRepeating(
++          [](BrowserWindowInterface* browser) {
++            if (HeliumWorkspaceController* c =
++                    HeliumWorkspaceController::From(browser)) {
++              c->CreateWorkspace();
++            }
++          },
++          browser_));
++  add_button->SetImageModel(
++      views::Button::STATE_NORMAL,
++      ui::ImageModel::FromVectorIcon(kAddIcon, ui::kColorMenuIcon,
++                                     kDotHitSize - 8));
++  // ImageButton draws its image at the top-left of its contents by default,
++  // which leaves the plus sitting a few pixels above the dot centres.
++  add_button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
++  add_button->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
++  add_button->SetTooltipText(
++      l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_NEW));
++  add_button->SetPreferredSize(gfx::Size(kDotHitSize, kDotHitSize));
++  add_button_ = AddChildView(std::move(add_button));
 +
 +  HeliumWorkspaceController* controller =
 +      HeliumWorkspaceController::From(browser);
@@ -4662,17 +4700,23 @@
 +          kDotGap * (static_cast<int>(children.size()) - 1);
 +    }
 +  }
-+  // Content-sized: the toolbar gives the row whatever width it can spare, and
-+  // only shrinks it below this (and therefore scrolls) when the trailing
-+  // controls need the space.
-+  const int width = std::max(content_width, kDotHitSize);
++  // Content-sized: dots plus the pinned "+". The toolbar gives the row whatever
++  // width it can spare, and only shrinks the scroll area below this (leaving
++  // the "+" visible) when the trailing controls need the space.
++  int width = content_width;
++  if (content_width > 0) {
++    width += kDotGap + kDotHitSize;
++  } else {
++    width = kDotHitSize;
++  }
++  width = std::max(width, kDotHitSize);
 +  return gfx::Size(width, row_height);
 +}
 +
 +gfx::Size HeliumWorkspaceSwitcherView::GetMinimumSize() const {
-+  // Keep at least one dot reachable when the toolbar is very narrow; the rest
-+  // of the row stays available by scrolling.
-+  return gfx::Size(kDotHitSize,
++  // One dot in the scroll area plus the pinned "+": the button is never
++  // allowed to scroll out of view or be squeezed away.
++  return gfx::Size(2 * kDotHitSize + kDotGap,
 +                   GetLayoutConstant(LayoutConstant::kVerticalTabHeight));
 +}
 +
@@ -4691,6 +4735,13 @@
 +      if (child->HitTestPoint(child_point)) {
 +        return true;
 +      }
++    }
++  }
++  if (add_button_ && add_button_->GetVisible()) {
++    gfx::Point button_point = point;
++    views::View::ConvertPointToTarget(this, add_button_, &button_point);
++    if (add_button_->HitTestPoint(button_point)) {
++      return true;
 +    }
 +  }
 +  if (scroll_view_) {
@@ -4735,29 +4786,6 @@
 +    items_.push_back(item.get());
 +    contents_view_->AddChildView(std::move(item));
 +  }
-+  // "New workspace" affordance. An ImageButton keeps hover feedback without
-+  // any opaque fill, so the translucent frame material shows through.
-+  auto add_button = std::make_unique<views::ImageButton>(
-+      base::BindRepeating(
-+          [](BrowserWindowInterface* browser) {
-+            if (HeliumWorkspaceController* c =
-+                    HeliumWorkspaceController::From(browser)) {
-+              c->CreateWorkspace();
-+            }
-+          },
-+          browser_));
-+  add_button->SetImageModel(
-+      views::Button::STATE_NORMAL,
-+      ui::ImageModel::FromVectorIcon(kAddIcon, ui::kColorMenuIcon,
-+                                     kDotHitSize - 8));
-+  // ImageButton draws its image at the top-left of its contents by default,
-+  // which leaves the plus sitting a few pixels above the dot centres.
-+  add_button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
-+  add_button->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
-+  add_button->SetTooltipText(
-+      l10n_util::GetStringUTF16(IDS_HELIUM_WORKSPACE_NEW));
-+  add_button->SetPreferredSize(gfx::Size(kDotHitSize, kDotHitSize));
-+  contents_view_->AddChildView(std::move(add_button));
 +
 +  // Only yank the row when the active workspace actually changed; ordinary
 +  // tab-count refreshes should not undo a manual scroll.
