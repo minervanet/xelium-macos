@@ -41,7 +41,7 @@
 
 --- a/chrome/browser/ui/helium/BUILD.gn
 +++ b/chrome/browser/ui/helium/BUILD.gn
-@@ -20,6 +20,42 @@
+@@ -20,6 +20,45 @@
    ]
  }
  
@@ -63,12 +63,15 @@
 +
 +  deps = [
 +    "//chrome/browser/bookmarks",
++    "//chrome/browser/favicon",
 +    "//chrome/browser/history",
 +    "//chrome/browser/search_engines",
 +    "//chrome/browser/ui/navigator",
 +    "//chrome/browser/ui/tabs:tab_model",
 +    "//chrome/browser/ui/tabs:tab_strip",
 +    "//components/bookmarks/browser",
++    "//components/favicon/core",
++    "//components/favicon_base",
 +    "//components/history/core/browser",
 +    "//components/keyed_service/core",
 +    "//components/search_engines",
@@ -320,7 +323,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.h
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,102 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -328,6 +331,7 @@
 +#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_CONTROLLER_H_
 +#define CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_CONTROLLER_H_
 +
++#include <map>
 +#include <memory>
 +#include <string>
 +#include <vector>
@@ -337,8 +341,10 @@
 +#include "base/memory/weak_ptr.h"
 +#include "base/task/cancelable_task_tracker.h"
 +#include "chrome/browser/ui/helium/helium_command_bar_model.h"
++#include "components/favicon_base/favicon_types.h"
 +#include "components/history/core/browser/history_types.h"
 +#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
++#include "ui/gfx/image/image.h"
 +#include "ui/gfx/native_ui_types.h"
 +
 +class BrowserWindowInterface;
@@ -397,6 +403,9 @@
 +                        const std::u16string& query,
 +                        history::QueryResults results);
 +  void PushItems(std::vector<HeliumCommandBarItem> items);
++  void FetchFavicons();
++  void OnFavicon(int seq, size_t index, const std::string& url_spec,
++                 const favicon_base::FaviconImageResult& result);
 +
 +  raw_ptr<BrowserWindowInterface> browser_;
 +  // Owned by the widget itself (deleted on close); null when hidden.
@@ -408,6 +417,10 @@
 +  int history_seq_ = 0;
 +  // Cancels in-flight history queries on each keystroke and on destruction.
 +  base::CancelableTaskTracker history_tracker_;
++  int items_seq_ = 0;
++  // Favicon cache keyed by URL spec; avoids refetching while scrolling keys.
++  std::map<std::string, gfx::Image> favicon_cache_;
++  base::CancelableTaskTracker favicon_tracker_;
 +  ui::ScopedUnownedUserData<HeliumCommandBarController> scoped_unowned_user_data_;
 +  base::WeakPtrFactory<HeliumCommandBarController> weak_factory_{this};
 +};
@@ -416,7 +429,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
-@@ -0,0 +1,222 @@
+@@ -0,0 +1,279 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -426,15 +439,18 @@
 +#include "base/functional/bind.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/bookmarks/bookmark_model_factory.h"
++#include "chrome/browser/favicon/favicon_service_factory.h"
 +#include "chrome/browser/history/history_service_factory.h"
 +#include "chrome/browser/ui/helium/helium_command_bar_view.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/navigator/browser_navigator.h"
 +#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/favicon/core/favicon_service.h"
 +#include "components/history/core/browser/history_service.h"
 +#include "components/keyed_service/core/service_access_type.h"
 +#include "content/public/browser/web_contents.h"
++#include "ui/base/clipboard/scoped_clipboard_writer.h"
 +#include "ui/base/page_transition_types.h"
 +#include "ui/base/window_open_disposition.h"
 +#include "ui/views/widget/widget.h"
@@ -586,9 +602,52 @@
 +void HeliumCommandBarController::PushItems(
 +    std::vector<HeliumCommandBarItem> items) {
 +  items_ = std::move(items);
++  ++items_seq_;
 +  if (view_) {
 +    view_->SetResults(items_);
 +  }
++  FetchFavicons();
++}
++
++void HeliumCommandBarController::FetchFavicons() {
++  favicon::FaviconService* favicons = FaviconServiceFactory::GetForProfile(
++      browser_->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
++  if (!favicons) {
++    return;
++  }
++  const int seq = items_seq_;
++  for (size_t i = 0; i < items_.size(); ++i) {
++    const GURL& url = items_[i].url;
++    if (!url.SchemeIsHTTPOrHTTPS()) {
++      continue;
++    }
++    const std::string spec = url.spec();
++    auto cached = favicon_cache_.find(spec);
++    if (cached != favicon_cache_.end() && view_) {
++      view_->SetItemImage(i, cached->second);
++      continue;
++    }
++    favicons->GetFaviconImageForPageURL(
++        url,
++        base::BindOnce(&HeliumCommandBarController::OnFavicon,
++                       weak_factory_.GetWeakPtr(), seq, i, spec),
++        &favicon_tracker_);
++  }
++}
++
++void HeliumCommandBarController::OnFavicon(
++    int seq,
++    size_t index,
++    const std::string& url_spec,
++    const favicon_base::FaviconImageResult& result) {
++  if (result.image.IsEmpty()) {
++    return;
++  }
++  favicon_cache_[url_spec] = result.image;
++  if (seq != items_seq_ || !view_ || index >= items_.size()) {
++    return;
++  }
++  view_->SetItemImage(index, result.image);
 +}
 +
 +void HeliumCommandBarController::ActivateItem(size_t index) {
@@ -623,6 +682,17 @@
 +        case HeliumCommandBarItem::Command::kOpenDownloads:
 +          url = GURL("chrome://downloads");
 +          break;
++        case HeliumCommandBarItem::Command::kCopyUrl: {
++          TabStripModel* tab_strip = browser_->GetTabStripModel();
++          content::WebContents* contents =
++              tab_strip ? tab_strip->GetActiveWebContents() : nullptr;
++          if (contents) {
++            ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
++            writer.WriteText(base::UTF8ToUTF16(contents->GetVisibleURL().spec()));
++          }
++          Hide();
++          return;
++        }
 +      }
 +      break;
 +    case HeliumCommandBarItem::Type::kBookmark:
@@ -642,7 +712,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.h
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,85 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -659,6 +729,11 @@
 +#include "chrome/browser/ui/helium/helium_command_bar_model.h"
 +#include "ui/views/controls/textfield/textfield_controller.h"
 +#include "ui/views/widget/widget_delegate.h"
++#include "ui/views/widget/widget_observer.h"
++
++namespace gfx {
++class Image;
++}  // namespace gfx
 +
 +namespace views {
 +class Label;
@@ -670,7 +745,8 @@
 +// Floating command bar popup: a text field with a results list below.
 +// Rows are rebuilt on every keystroke; extras are clipped, never scrolled.
 +class HeliumCommandBarView : public views::WidgetDelegate,
-+                             public views::TextfieldController {
++                             public views::TextfieldController,
++                             public views::WidgetObserver {
 + public:
 +  // Creates, focuses and shows the popup parented to |parent|. |on_closed|
 +  // runs when the widget begins closing, |on_query| on every keystroke,
@@ -691,6 +767,8 @@
 +
 +  // Rebuilds the rows from |items| and resizes the popup to fit.
 +  void SetResults(const std::vector<HeliumCommandBarItem>& items);
++  // Sets the favicon for a visible row; no-op if the row is gone.
++  void SetItemImage(size_t index, const gfx::Image& image);
 +
 +  // views::TextfieldController:
 +  void ContentsChanged(views::Textfield* sender,
@@ -707,6 +785,7 @@
 +                       base::RepeatingCallback<void(size_t)> on_activate);
 +
 +  void WindowClosing() override;
++  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 +  void MoveSelection(int delta);
 +  void UpdateRowHighlight();
 +
@@ -722,7 +801,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
-@@ -0,0 +1,258 @@
+@@ -0,0 +1,289 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -734,10 +813,12 @@
 +#include "base/functional/bind.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/models/image_model.h"
 +#include "ui/events/event.h"
 +#include "ui/events/keycodes/keyboard_codes.h"
 +#include "ui/gfx/font_list.h"
 +#include "ui/gfx/geometry/rect.h"
++#include "ui/views/controls/image_view.h"
 +#include "ui/views/controls/label.h"
 +#include "ui/views/controls/textfield/textfield.h"
 +#include "ui/views/layout/box_layout.h"
@@ -781,7 +862,10 @@
 +        views::BoxLayout::Orientation::kHorizontal,
 +        gfx::Insets::VH(4, kHorizontalPadding), 8));
 +    marker_ = AddChildView(std::make_unique<views::Label>(u""));
-+    marker_->SetPreferredSize(gfx::Size(16, kRowHeight));
++    marker_->SetPreferredSize(gfx::Size(12, kRowHeight));
++    icon_ = AddChildView(std::make_unique<views::ImageView>());
++    icon_->SetPreferredSize(gfx::Size(16, 16));
++    icon_->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
 +    auto* text = AddChildView(std::make_unique<views::View>());
 +    text->SetLayoutManager(std::make_unique<views::BoxLayout>(
 +        views::BoxLayout::Orientation::kVertical, gfx::Insets(), 1));
@@ -821,6 +905,11 @@
 +        selected ? gfx::Font::Weight::BOLD : gfx::Font::Weight::NORMAL));
 +  }
 +
++  void SetImage(const gfx::Image& image) {
++    icon_->SetImage(
++        ui::ImageModel::FromImageSkia(*image.ToImageSkia()));
++  }
++
 +  bool OnMousePressed(const ui::MouseEvent& event) override {
 +    if (event.IsOnlyLeftMouseButton() && !on_click_.is_null()) {
 +      on_click_.Run();
@@ -831,6 +920,7 @@
 +
 + private:
 +  raw_ptr<views::Label> marker_ = nullptr;
++  raw_ptr<views::ImageView> icon_ = nullptr;
 +  raw_ptr<views::Label> title_ = nullptr;
 +  base::RepeatingClosure on_click_;
 +};
@@ -870,6 +960,7 @@
 +      parent_bounds.y() + parent_bounds.height() / 5, kBarWidth,
 +      kInputHeight + 2 * 8));
 +  widget->Show();
++  widget->AddObserver(view);
 +  view->input_->RequestFocus();
 +  return view;
 +}
@@ -931,6 +1022,15 @@
 +  }
 +}
 +
++void HeliumCommandBarView::SetItemImage(size_t index,
++                                          const gfx::Image& image) {
++  const auto& children = results_->children();
++  if (index >= children.size()) {
++    return;
++  }
++  static_cast<ResultRowView*>(children[index].get())->SetImage(image);
++}
++
 +void HeliumCommandBarView::MoveSelection(int delta) {
 +  const size_t count = results_->children().size();
 +  if (count == 0) {
@@ -949,7 +1049,17 @@
 +}
 +
 +void HeliumCommandBarView::WindowClosing() {
++  if (GetWidget()) {
++    GetWidget()->RemoveObserver(this);
++  }
 +  std::move(on_closed_).Run();
++}
++
++void HeliumCommandBarView::OnWidgetActivationChanged(views::Widget* widget,
++                                                     bool active) {
++  if (!active) {
++    Close();
++  }
 +}
 +
 +void HeliumCommandBarView::ContentsChanged(
