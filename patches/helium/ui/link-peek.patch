@@ -9,7 +9,7 @@
  #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
  #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
  #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
-@@ -540,6 +542,21 @@
+@@ -540,6 +542,20 @@
  #if DCHECK_IS_ON()
    DCHECK(params.Valid());
  #endif
@@ -23,15 +23,14 @@
 +        params.is_renderer_initiated && params.user_gesture &&
 +        !params.started_from_context_menu;
 +    if (is_link_click &&
-+        peek->MaybePeek(source, params.url, params.disposition,
-+                        helium::LinkPeekModifierHeld())) {
++        peek->MaybePeek(source, params, helium::LinkPeekModifierHeld())) {
 +      return nullptr;
 +    }
 +  }
  
    if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_DEVTOOLS)) {
      DevToolsWindow* window = DevToolsWindow::AsDevToolsWindow(source);
-@@ -672,6 +689,21 @@
+@@ -672,6 +688,21 @@
      const blink::mojom::WindowFeatures& window_features,
      bool user_gesture,
      bool* was_blocked) {
@@ -331,7 +330,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_controller.h
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,134 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -366,6 +365,7 @@
 +
 +namespace content {
 +class WebContents;
++struct OpenURLParams;
 +}  // namespace content
 +
 +namespace views {
@@ -417,9 +417,11 @@
 +  // their native behavior (instant tab, context menu, native split).
 +  // Middle-click (background tab) also keeps its native behavior; peek
 +  // triggers on Shift+click and links that force a new foreground tab.
++  // The full OpenURLParams are forwarded so the preview navigation is
++  // built from the same record a real new tab would use (initiator,
++  // referrer, gesture) rather than a hand-rolled URL load.
 +  bool MaybePeek(content::WebContents* source,
-+                 const GURL& url,
-+                 WindowOpenDisposition disposition,
++                 const content::OpenURLParams& params,
 +                 bool modifier_held);
 +  bool MaybePeekPopup(content::WebContents* source,
 +                      const GURL& target_url,
@@ -441,7 +443,9 @@
 +      content::NavigationHandle* navigation_handle) override;
 +
 + private:
-+  void Show(content::WebContents* source, const GURL& url);
++  void Show(content::WebContents* source,
++            const GURL& url,
++            const content::OpenURLParams* open_url_params);
 +  void UpdateTitleAndIcon();
 +  void OnWidgetClosed();
 +  void FetchFavicons();
@@ -464,7 +468,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_controller.cc
-@@ -0,0 +1,306 @@
+@@ -0,0 +1,330 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -492,9 +496,11 @@
 +#include "content/public/browser/web_contents_delegate.h"
 +#include "content/public/browser/navigation_entry.h"
 +#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/page_navigator.h"
 +#include "content/public/browser/render_frame_host.h"
 +#include "content/public/browser/web_contents.h"
 +#include "content/public/common/referrer.h"
++#include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
 +#include "ui/base/clipboard/scoped_clipboard_writer.h"
 +#include "ui/base/page_transition_types.h"
 +#include "ui/views/widget/widget.h"
@@ -567,25 +573,25 @@
 +
 +HeliumLinkPeekController::~HeliumLinkPeekController() = default;
 +
-+bool HeliumLinkPeekController::MaybePeek(content::WebContents* source,
-+                                         const GURL& url,
-+                                         WindowOpenDisposition disposition,
-+                                         bool modifier_held) {
++bool HeliumLinkPeekController::MaybePeek(
++    content::WebContents* source,
++    const content::OpenURLParams& params,
++    bool modifier_held) {
 +  if (IsShowing() || modifier_held) {
 +    return false;
 +  }
-+  if (disposition != WindowOpenDisposition::NEW_FOREGROUND_TAB &&
-+      disposition != WindowOpenDisposition::NEW_WINDOW) {
++  if (params.disposition != WindowOpenDisposition::NEW_FOREGROUND_TAB &&
++      params.disposition != WindowOpenDisposition::NEW_WINDOW) {
 +    return false;
 +  }
 +  if (!browser_->GetProfile()->GetPrefs()->GetBoolean(
 +          prefs::kHeliumLinkPeekEnabled)) {
 +    return false;
 +  }
-+  if (!url.SchemeIsHTTPOrHTTPS() || IsDownloadUrl(url)) {
++  if (!params.url.SchemeIsHTTPOrHTTPS() || IsDownloadUrl(params.url)) {
 +    return false;
 +  }
-+  Show(source, url);
++  Show(source, params.url, &params);
 +  return true;
 +}
 +
@@ -606,12 +612,14 @@
 +  }
 +  // The renderer's own WebContents is discarded; the preview loads the target
 +  // directly so open/split adopt the finished page with no reload.
-+  Show(source, target_url);
++  Show(source, target_url, nullptr);
 +  return true;
 +}
 +
-+void HeliumLinkPeekController::Show(content::WebContents* source,
-+                                    const GURL& url) {
++void HeliumLinkPeekController::Show(
++    content::WebContents* source,
++    const GURL& url,
++    const content::OpenURLParams* open_url_params) {
 +  preview_url_ = url;
 +  content::WebContents::CreateParams params(browser_->GetProfile());
 +  preview_contents_ = content::WebContents::Create(params);
@@ -649,21 +657,29 @@
 +  // first frame there. Navigating while detached leaves a blank bubble: the
 +  // page commits at 0x0 and only paints once adopted into a tab.
 +  Observe(preview_contents_.get());
-+  content::NavigationController::LoadURLParams load_params(url);
-+  load_params.transition_type = ui::PAGE_TRANSITION_LINK;
-+  if (source && !source->GetLastCommittedURL().is_empty()) {
-+    // Renderer-initiated so the Shift+click gesture propagates user
-+    // activation to the preview (same eTLD+1): autoplay behaves exactly
-+    // like a real new tab opened from the same click. Browser-initiated
-+    // loads never carry activation, which is why videos sat paused.
-+    // (DCHECK: renderer-initiated loads require initiator_origin.)
-+    const GURL source_url = source->GetLastCommittedURL();
-+    load_params.is_renderer_initiated = true;
-+    load_params.initiator_origin = url::Origin::Create(source_url);
-+    load_params.referrer =
-+        content::Referrer(source_url, network::mojom::ReferrerPolicy::kDefault);
++  // Build the preview navigation from the same record a real new tab would
++  // use. The OpenURLParams copy carries the genuine initiator (frame token,
++  // origin, site instance), referrer, renderer-initiated bit and gesture —
++  // a hand-rolled URL load carries none of that, which is why autoplay
++  // never engaged.
++  std::optional<content::NavigationController::LoadURLParams> load_params;
++  if (open_url_params) {
++    load_params.emplace(*open_url_params);
++  } else {
++    load_params.emplace(url);
++    load_params->transition_type = ui::PAGE_TRANSITION_LINK;
++    load_params->has_user_gesture = true;
++    if (source && !source->GetLastCommittedURL().is_empty()) {
++      // (DCHECK: renderer-initiated loads require initiator_origin.)
++      const GURL source_url = source->GetLastCommittedURL();
++      load_params->is_renderer_initiated = true;
++      load_params->initiator_origin = url::Origin::Create(source_url);
++      load_params->referrer = content::Referrer(
++          source_url, network::mojom::ReferrerPolicy::kDefault);
++    }
 +  }
-+  preview_contents_->GetController().LoadURLWithParams(load_params);
++  preview_contents_->GetController().LoadURLWithParams(
++      std::move(*load_params));
 +  UpdateTitleAndIcon();
 +}
 +
@@ -765,6 +781,18 @@
 +  if (navigation_handle && navigation_handle->HasCommitted() &&
 +      !navigation_handle->IsErrorPage()) {
 +    UpdateTitleAndIcon();
++    if (navigation_handle->IsInPrimaryMainFrame()) {
++      // Convey the genuine Shift+click gesture as transient activation.
++      // Browser-side loads filter gestures out of the commit params, so
++      // without this the preview never holds activation and autoplay
++      // stays paused. The click was real; this just carries it across
++      // our manual navigation the way a real new tab would.
++      if (content::RenderFrameHost* rfh =
++              navigation_handle->GetRenderFrameHost()) {
++        rfh->NotifyUserActivation(
++            blink::mojom::UserActivationNotificationType::kInteraction);
++      }
++    }
 +  }
 +}
 +
@@ -917,7 +945,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_link_peek_view.cc
-@@ -0,0 +1,258 @@
+@@ -0,0 +1,260 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -991,13 +1019,16 @@
 +  button->SetPreferredSize(gfx::Size(kActionButtonSize, kActionButtonSize));
 +  button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
 +  button->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
-+  // Circular hover/press background like toolbar buttons. The icon tint
-+  // alone is nearly invisible in some themes; the ink-drop highlight is
-+  // the actual hover indicator.
++  // Rounded gray hover/press background like toolbar items — not a circle.
++  // An explicit theme-aware base color: the ink-drop default resolved red
++  // in this bubble.
 +  button->SetHasInkDropActionOnClick(true);
 +  views::HighlightPathGenerator::Install(
 +      button,
-+      std::make_unique<views::CircleHighlightPathGenerator>(gfx::Insets()));
++      std::make_unique<views::RoundRectHighlightPathGenerator>(gfx::Insets(),
++                                                               8));
++  views::InkDrop::Get(button)->SetBaseColor(ui::kColorMenuIcon);
++  views::InkDrop::Get(button)->SetHighlightOpacity(0.12f);
 +  views::InkDrop::Get(button)->SetMode(views::InkDropHost::InkDropMode::ON);
 +  return button;
 +}
@@ -1090,8 +1121,7 @@
 +  // Weight 1: the title absorbs all excess header width so the action
 +  // buttons sit flush at the right end. (BoxLayout weights, not the
 +  // FlexLayout property: kFlexBehaviorKey is silently ignored here.)
-+  header_layout->SetFlexForView(title_, 1);
-+  ActionButton(kOpenInNewIcon, u"Open in new tab", header,
++  header_layout->SetFlexForView(title_, 1);  ActionButton(kOpenInNewIcon, u"Open in new tab", header,
 +               base::BindRepeating(
 +                   [](HeliumLinkPeekView* view) {
 +                     view->on_open_tab_.Run(true);
