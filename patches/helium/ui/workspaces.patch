@@ -233,80 +233,6 @@
    }
  
 
---- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-+++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -41,6 +41,7 @@
- class VerticalTabStripFocusSwipeController;
- class VerticalTabStripHeaderView;
- class ShadowFrameView;
-+class HeliumWorkspaceSwitcherView;
- 
- namespace tabs {
- class VerticalTabStripStateController;
-@@ -278,6 +279,7 @@
- 
-   raw_ptr<VerticalTabStripHeaderView> header_view_ = nullptr;
-   raw_ptr<VerticalTabStripBottomContainer> bottom_button_container_ = nullptr;
-+  raw_ptr<HeliumWorkspaceSwitcherView> workspace_switcher_ = nullptr;
-   raw_ptr<views::View> gemini_button_ = nullptr;
-   raw_ptr<views::ResizeArea> resize_area_ = nullptr;
-   raw_ptr<ShadowFrameView> shadow_frame_ = nullptr;
-
---- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-+++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -26,6 +26,8 @@
- #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
- #include "chrome/browser/ui/color/chrome_color_id.h"
- #include "chrome/browser/ui/layout_constants.h"
-+#include "chrome/browser/ui/helium/helium_workspace_controller.h"
-+#include "chrome/browser/ui/helium/helium_workspace_switcher_view.h"
- #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
- #include "chrome/browser/ui/tabs/features.h"
- #include "chrome/browser/ui/tabs/hover_tab_selector.h"
-@@ -160,6 +162,21 @@
-       gfx::Insets::TLBR(kBottomContainerGap, region_horizontal_padding,
-                         0, region_horizontal_padding));
- 
-+  // Workspaces switcher: a compact dot row between the tab list and the
-+  // new-tab button. It hides itself when workspaces are unavailable, so the
-+  // layout is unchanged for everyone else.
-+  if (HeliumWorkspaceController::From(browser_view->browser())) {
-+    auto switcher = std::make_unique<HeliumWorkspaceSwitcherView>(
-+        browser_view->browser());
-+    switcher->SetProperty(
-+        views::kMarginsKey,
-+        gfx::Insets::TLBR(0, region_horizontal_padding, 0,
-+                          region_horizontal_padding));
-+    workspace_switcher_ = content_area_view_->AddChildViewAt(
-+        std::move(switcher),
-+        content_area_view_->GetIndexOf(bottom_button_container_).value());
-+  }
-+
-   gemini_button_ =
-       content_area_view_->AddChildView(std::make_unique<views::View>());
- 
-@@ -881,11 +898,15 @@
- 
-   views::View* const content_parent =
-       content_area_view_ ? content_area_view_.get() : this;
--  std::optional<size_t> bottom_container_index =
--      content_parent->GetIndexOf(bottom_button_container_);
--  CHECK(bottom_container_index.has_value());
--  content_parent->AddChildViewAt(std::move(view),
--                                 bottom_container_index.value());
-+  // Tabs go above the workspace switcher, which itself sits above the
-+  // new-tab button.
-+  views::View* anchor = bottom_button_container_;
-+  if (workspace_switcher_) {
-+    anchor = workspace_switcher_;
-+  }
-+  std::optional<size_t> anchor_index = content_parent->GetIndexOf(anchor);
-+  CHECK(anchor_index.has_value());
-+  content_parent->AddChildViewAt(std::move(view), anchor_index.value());
- 
-   // Pre-set the animation values to the appropriate state.
-   auto* const animation_controller =
-
 --- a/chrome/browser/ui/tabs/tab_creation_metrics_controller.cc
 +++ b/chrome/browser/ui/tabs/tab_creation_metrics_controller.cc
 @@ -74,12 +74,20 @@
@@ -1038,6 +964,100 @@
    if (index != TabStripModel::kNoTab) {
      model->ActivateTabAt(index,
                           TabStripUserGestureDetails(
+
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -55,6 +55,7 @@
+ class BrowserWindowInterface;
+ class ExtensionsToolbarButton;
+ class ExtensionsToolbarDesktop;
++class HeliumWorkspaceSwitcherView;
+ class HomeButton;
+ class ExtensionsToolbarCoordinator;
+ class MediaToolbarButton;
+@@ -591,6 +592,12 @@
+   bool should_show_glic_button_ = false;
+   bool should_show_glic_actor_ = false;
+   raw_ptr<VerticalTabStripHeaderView> sidebar_controls_host_ = nullptr;
++  // Workspace dots row at the leading edge of the top bar. Hidden by the view
++  // itself when workspaces are unavailable.
++  raw_ptr<HeliumWorkspaceSwitcherView> workspace_switcher_ = nullptr;
++  // Takes the slack between the workspace row and the trailing toolbar
++  // controls while the sidebar hosts the navigation buttons and address bar.
++  raw_ptr<views::View> toolbar_spacer_ = nullptr;
+   // Button shown at the leading end of the sidebar navigation row while the
+   // sidebar hosts the navigation buttons and the address bar. Toggles
+   // "always show the sidebar" (zen side-chrome pin).
+
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -60,6 +60,8 @@
+ #include "chrome/browser/ui/global_error/global_error_service_factory.h"
+ #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
++#include "chrome/browser/ui/helium/helium_workspace_controller.h"
++#include "chrome/browser/ui/helium/helium_workspace_switcher_view.h"
+ #include "chrome/browser/ui/intent_picker_tab_helper.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/omnibox/omnibox_view.h"
+@@ -928,6 +930,30 @@
+       base::BindRepeating(&ToolbarView::OnLocationBarCenteredChanged,
+                           base::Unretained(this)));
+ 
++  // Workspaces: put the dot row at the leading edge of the top bar. The row
++  // scrolls horizontally, so it keeps a compact preferred width instead of
++  // stretching across the whole bar.
++  if (HeliumWorkspaceController::From(browser_)) {
++    workspace_switcher_ = AddChildViewAt(
++        std::make_unique<HeliumWorkspaceSwitcherView>(browser_), 0);
++    workspace_switcher_->SetProperty(
++        views::kFlexBehaviorKey,
++        views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToMinimum,
++                                 views::MaximumFlexSizeRule::kPreferred));
++
++    // A zero-preferred-size spacer is ignored by FlexLayout, so give it a
++    // nominal size; it absorbs the slack that keeps the trailing controls at
++    // the end of the bar while the sidebar hosts the navigation controls.
++    auto spacer = std::make_unique<views::View>();
++    spacer->SetPreferredSize(gfx::Size(1, 1));
++    spacer->SetProperty(
++        views::kFlexBehaviorKey,
++        views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
++                                 views::MaximumFlexSizeRule::kUnbounded));
++    spacer->SetVisible(false);
++    toolbar_spacer_ = AddChildViewAt(std::move(spacer), 1);
++  }
++
+   InitLayout();
+ 
+   auto flex_preferred =
+@@ -2415,11 +2441,24 @@
+                                              : views::kSidebarLeftIcon);
+     }
+ 
+-    static_cast<ResponsiveToolbarLayout*>(layout_manager_.get())
+-        ->SetMainAxisAlignment(views::LayoutAlignment::kEnd);
++    if (workspace_switcher_) {
++      // Keep the workspace row at the leading edge and let the spacer absorb
++      // the slack, so the remaining controls stay against the trailing end.
++      if (toolbar_spacer_) {
++        toolbar_spacer_->SetVisible(true);
++      }
++      static_cast<ResponsiveToolbarLayout*>(layout_manager_.get())
++          ->SetMainAxisAlignment(views::LayoutAlignment::kStart);
++    } else {
++      static_cast<ResponsiveToolbarLayout*>(layout_manager_.get())
++          ->SetMainAxisAlignment(views::LayoutAlignment::kEnd);
++    }
+     return;
+   }
+ 
++  if (toolbar_spacer_) {
++    toolbar_spacer_->SetVisible(false);
++  }
+   static_cast<ResponsiveToolbarLayout*>(layout_manager_.get())
+       ->SetMainAxisAlignment(views::LayoutAlignment::kStart);
+ 
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_utils.h
@@ -3941,15 +3961,14 @@
 +class ScrollView;
 +}
 +
-+// Small workspace switcher row for the bottom of the vertical sidebar: one
-+// dot per workspace plus a button for creating workspaces. Click switches,
-+// right-click offers rename/delete; the name is shown in the tooltip. The dots
-+// live in a single horizontally scrollable row, so the row never grows taller
-+// or pushes the pinned bottom bar, even at the narrowest sidebar width. The
-+// active dot is scrolled into view when switching, creating, or on startup.
-+// Hidden entirely when workspaces are unavailable (feature off, private or
-+// non-normal windows). Uses only theme colors so translucent native frame
-+// materials keep working.
++// Small workspace switcher row for the leading edge of the top bar: one dot per
++// workspace plus a button for creating workspaces. Click switches, right-click
++// offers rename/delete; the name is shown in the tooltip. The dots live in a
++// single horizontally scrollable row, so the row never grows taller or pushes
++// the toolbar controls. The active dot is scrolled into view when switching,
++// creating, or on startup. Hidden entirely when workspaces are unavailable
++// (feature off, private or non-normal windows). Uses only theme colors so
++// translucent native frame materials keep working.
 +class HeliumWorkspaceSwitcherView : public views::View {
 +  METADATA_HEADER(HeliumWorkspaceSwitcherView, views::View)
 +
@@ -3963,6 +3982,7 @@
 +  // views::View:
 +  gfx::Size CalculatePreferredSize(
 +      const views::SizeBounds& available_size) const override;
++  gfx::Size GetMinimumSize() const override;
 +
 + private:
 +  class ContentsView;
@@ -3992,13 +4012,14 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.cc
-@@ -0,0 +1,721 @@
+@@ -0,0 +1,746 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
 +
 +#include "chrome/browser/ui/helium/helium_workspace_switcher_view.h"
 +
++#include <algorithm>
 +#include <optional>
 +#include <utility>
 +
@@ -4054,6 +4075,9 @@
 +constexpr int kDotGap = 2;
 +constexpr int kDotRadius = 6;
 +constexpr int kDotRingWidth = 2;
++// In the top bar the row shares space with the window controls and toolbar
++// buttons, so cap its preferred width; anything beyond this scrolls.
++constexpr int kMaxSwitcherWidth = 240;
 +
 +std::u16string TooltipFor(const std::string& name,
 +                          bool active,
@@ -4192,7 +4216,7 @@
 +
 +// A single workspace dot. Left-click switches, right-click opens rename and
 +// delete. The name is exposed through the tooltip and accessibility tree so
-+// the row stays small enough for a narrow sidebar.
++// the row stays compact.
 +class HeliumWorkspaceSwitcherView::WorkspaceItemView
 +    : public views::View,
 +      public ui::SimpleMenuModel::Delegate {
@@ -4488,7 +4512,7 @@
 +// empty row space (including the gaps between dots) starts a click-and-drag
 +// horizontal scroll instead. The view is at least as wide as the viewport, so
 +// clicks in the empty part of a short row still land here and bubble up to the
-+// sidebar context menu.
++// surrounding chrome.
 +class HeliumWorkspaceSwitcherView::ContentsView : public views::View {
 + public:
 +  explicit ContentsView(HeliumWorkspaceSwitcherView* owner) : owner_(owner) {
@@ -4497,7 +4521,7 @@
 +            views::BoxLayout::Orientation::kHorizontal,
 +            gfx::Insets::VH(kRowVerticalInset, 0), kDotGap)));
 +    layout->set_main_axis_alignment(
-+        views::BoxLayout::MainAxisAlignment::kCenter);
++        views::BoxLayout::MainAxisAlignment::kStart);
 +    layout->set_cross_axis_alignment(
 +        views::BoxLayout::CrossAxisAlignment::kCenter);
 +    SetFocusBehavior(FocusBehavior::NEVER);
@@ -4508,7 +4532,7 @@
 +  bool OnMousePressed(const ui::MouseEvent& event) override {
 +    if (!event.IsOnlyLeftMouseButton() || !owner_->scroll_view_ ||
 +        !owner_->scroll_view_->IsHorizontalContentOverflowing()) {
-+      // Nothing to scroll: let the sidebar handle the drag as usual.
++      // Nothing to scroll: let the surrounding chrome handle the drag.
 +      return false;
 +    }
 +    dragging_ = true;
@@ -4592,7 +4616,28 @@
 +    const views::SizeBounds& available_size) const {
 +  const int row_height =
 +      GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
-+  return gfx::Size(kDotHitSize, row_height);
++
++  int content_width = 0;
++  if (contents_view_) {
++    const auto& children = contents_view_->children();
++    for (const auto& child : children) {
++      content_width += child->GetPreferredSize().width();
++    }
++    if (children.size() > 1) {
++      content_width +=
++          kDotGap * (static_cast<int>(children.size()) - 1);
++    }
++  }
++  const int width =
++      std::clamp(content_width, kDotHitSize, kMaxSwitcherWidth);
++  return gfx::Size(width, row_height);
++}
++
++gfx::Size HeliumWorkspaceSwitcherView::GetMinimumSize() const {
++  // Keep at least one dot reachable when the toolbar is very narrow; the rest
++  // of the row stays available by scrolling.
++  return gfx::Size(kDotHitSize,
++                   GetLayoutConstant(LayoutConstant::kVerticalTabHeight));
 +}
 +
 +void HeliumWorkspaceSwitcherView::Refresh() {
@@ -4625,7 +4670,7 @@
 +    contents_view_->AddChildView(std::move(item));
 +  }
 +  // "New workspace" affordance. An ImageButton keeps hover feedback without
-+  // any opaque fill, so the translucent sidebar material shows through.
++  // any opaque fill, so the translucent frame material shows through.
 +  auto add_button = std::make_unique<views::ImageButton>(
 +      base::BindRepeating(
 +          [](BrowserWindowInterface* browser) {
