@@ -1,0 +1,467 @@
+--- a/chrome/app/chrome_command_ids.h
++++ b/chrome/app/chrome_command_ids.h
+@@ -300,6 +300,7 @@
+ #define IDC_HELIUM_SERVICES_OPEN 40700
+ #define IDC_HELIUM_NEXT_WORKSPACE 40701
+ #define IDC_HELIUM_PREVIOUS_WORKSPACE 40702
++#define IDC_HELIUM_COMMAND_BAR 40703
+ 
+ // Spell-check
+ #define IDC_SPELLCHECK_SUGGESTION_0     41000
+
+--- a/chrome/browser/ui/helium/BUILD.gn
++++ b/chrome/browser/ui/helium/BUILD.gn
+@@ -20,6 +20,27 @@
+   ]
+ }
+ 
++source_set("helium_command_bar") {
++  sources = [
++    "helium_command_bar_controller.cc",
++    "helium_command_bar_controller.h",
++    "helium_command_bar_view.cc",
++    "helium_command_bar_view.h",
++  ]
++
++  public_deps = [
++    "//base",
++    "//chrome/browser/ui/browser_window",
++    "//ui/base/unowned_user_data",
++  ]
++
++  deps = [
++    "//ui/events",
++    "//ui/gfx",
++    "//ui/views",
++  ]
++}
++
+ source_set("helium_workspaces") {
+   sources = [
+     "helium_workspace_controller.cc",
+
+--- a/chrome/browser/ui/browser_window/public/browser_window_features.h
++++ b/chrome/browser/ui/browser_window/public/browser_window_features.h
+@@ -80,6 +80,7 @@
+ class FindBarOwner;
+ class FullscreenControlHost;
+ class HeliumLayoutStateController;
++class HeliumCommandBarController;
+ class HeliumWorkspaceController;
+ class HistoryClustersSidePanelCoordinator;
+ class HistorySidePanelCoordinator;
+@@ -473,6 +474,9 @@
+   // Per-window Workspaces state. Owned here so the tab strip, sidebar and tab
+   // menu can all reach it via HeliumWorkspaceController::From(browser).
+   std::unique_ptr<HeliumWorkspaceController> helium_workspace_controller_;
++  // Per-window native command bar. Owned here so the command handler can
++  // reach it via HeliumCommandBarController::From(browser).
++  std::unique_ptr<HeliumCommandBarController> helium_command_bar_controller_;
+ 
+   std::unique_ptr<tabs::VerticalTabStripStateController>
+       vertical_tab_strip_state_controller_;
+
+--- a/chrome/browser/ui/browser_window/internal/browser_window_features.cc
++++ b/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+@@ -81,6 +81,7 @@
+ #include "chrome/browser/ui/focus/browser_focus_controller_webui.h"
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
++#include "chrome/browser/ui/helium/helium_command_bar_controller.h"
+ #include "chrome/browser/ui/helium/helium_workspace_controller.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
+@@ -657,6 +658,10 @@
+         GetUserDataFactory().CreateInstance<HeliumWorkspaceController>(
+             *browser, browser, profile->GetPrefs());
+ 
++    helium_command_bar_controller_ =
++        GetUserDataFactory().CreateInstance<HeliumCommandBarController>(
++            *browser, browser);
++
+     vertical_tab_strip_state_controller_ =
+         GetUserDataFactory()
+             .CreateInstance<tabs::VerticalTabStripStateControllerImpl>(
+
+--- a/chrome/browser/ui/browser_window/internal/BUILD.gn
++++ b/chrome/browser/ui/browser_window/internal/BUILD.gn
+@@ -115,6 +115,7 @@
+       "//chrome/browser/ui/focus",
+       "//chrome/browser/ui/fullscreen",
+       "//chrome/browser/ui/helium:helium_layout_state_controller",
++      "//chrome/browser/ui/helium:helium_command_bar",
+       "//chrome/browser/ui/helium:helium_workspaces",
+       "//chrome/browser/ui/lens",
+       "//chrome/browser/ui/performance_controls",
+
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -71,6 +71,7 @@
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
++#include "chrome/browser/ui/helium/helium_command_bar_controller.h"
+ #include "chrome/browser/ui/helium/helium_workspace_controller.h"
+ #include "chrome/browser/ui/lens/lens_overlay_controller.h"
+ #include "chrome/browser/ui/managed_ui.h"
+@@ -866,6 +867,16 @@
+               HeliumWorkspaceController::From(browser_)) {
+         workspaces->SwitchToAdjacentWorkspace(
+             id == IDC_HELIUM_NEXT_WORKSPACE ? 1 : -1);
++      }
++      break;
++    case IDC_HELIUM_COMMAND_BAR:
++      if (HeliumCommandBarController* command_bar =
++              HeliumCommandBarController::From(browser_)) {
++        BrowserView* const browser_view =
++            BrowserView::GetBrowserViewForBrowser(browser_);
++        if (browser_view) {
++          command_bar->Toggle(browser_view->GetWidget()->GetNativeView());
++        }
+       }
+       break;
+     case IDC_DUPLICATE_TAB:
+@@ -2103,6 +2114,9 @@
+   // feature is off or the window has a single workspace.
+   command_updater_->UpdateCommandEnabled(IDC_HELIUM_NEXT_WORKSPACE, true);
+   command_updater_->UpdateCommandEnabled(IDC_HELIUM_PREVIOUS_WORKSPACE, true);
++  // Provisional shortcut; the Cmd+T / Cmd+L takeover arrives with the results
++  // list.
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_COMMAND_BAR, true);
+   command_updater_->UpdateCommandEnabled(IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN,
+                                          false);
+   command_updater_->UpdateCommandEnabled(IDC_SET_BROWSER_AS_DEFAULT, true);
+
+--- a/chrome/browser/ui/accelerator_table.cc
++++ b/chrome/browser/ui/accelerator_table.cc
+@@ -81,6 +81,8 @@
+     {ui::VKEY_LEFT, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN |
+                         ui::EF_PLATFORM_ACCELERATOR,
+      IDC_HELIUM_PREVIOUS_WORKSPACE},
++    {ui::VKEY_K, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
++     IDC_HELIUM_COMMAND_BAR},
+     {ui::VKEY_O, ui::EF_PLATFORM_ACCELERATOR, IDC_OPEN_FILE},
+     {ui::VKEY_P, ui::EF_PLATFORM_ACCELERATOR, IDC_PRINT},
+     {ui::VKEY_R, ui::EF_PLATFORM_ACCELERATOR, IDC_RELOAD},
+
+--- a/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -122,6 +122,7 @@
+       {true,  false, false, true,  kVK_LeftArrow,         IDC_SELECT_PREVIOUS_TAB},
+       {true,  true,  false, true,  kVK_RightArrow,        IDC_HELIUM_NEXT_WORKSPACE},
+       {true,  true,  false, true,  kVK_LeftArrow,         IDC_HELIUM_PREVIOUS_WORKSPACE},
++      {true,  true,  false, false, kVK_ANSI_K,            IDC_HELIUM_COMMAND_BAR},
+       {false, true,  true,  false, kVK_PageDown,          IDC_MOVE_TAB_NEXT},
+       {false, true,  true,  false, kVK_PageUp,            IDC_MOVE_TAB_PREVIOUS},
+ 
+
+--- a/chrome/browser/ui/cocoa/accelerators_cocoa.mm
++++ b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+@@ -119,6 +119,9 @@
+     {IDC_HELIUM_PREVIOUS_WORKSPACE,
+      ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN,
+      ui::VKEY_LEFT},
++    {IDC_HELIUM_COMMAND_BAR,
++     ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
++     ui::VKEY_K},
+ };
+ 
+ ui::Accelerator AcceleratorForCloseWindow() {
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_command_bar_controller.h
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_CONTROLLER_H_
++#define CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_CONTROLLER_H_
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
++#include "ui/gfx/native_ui_types.h"
++
++class BrowserWindowInterface;
++
++namespace views {
++class Widget;
++}  // namespace views
++
++// Per-window native command bar (floating URL/command palette).
++//
++// Lumno implements its command bar as an extension content script, which
++// Chromium refuses to inject into chrome:// pages, WebUI and the new tab
++// page — so the bar can never open there. This controller instead owns a
++// plain Views popup widget anchored to the browser window, so it opens on
++// every page including settings and the new tab page.
++//
++// The controller is owned by BrowserWindowFeatures and reachable via
++// HeliumCommandBarController::From(browser). The parent window is supplied by
++// the command handler at toggle time, keeping this target free of the
++// views/frame dependency.
++class HeliumCommandBarController {
++ public:
++  DECLARE_USER_DATA(HeliumCommandBarController);
++
++  static HeliumCommandBarController* From(BrowserWindowInterface* browser);
++
++  explicit HeliumCommandBarController(BrowserWindowInterface* browser);
++  HeliumCommandBarController(const HeliumCommandBarController&) = delete;
++  HeliumCommandBarController& operator=(const HeliumCommandBarController&) =
++      delete;
++  ~HeliumCommandBarController();
++
++  void Toggle(gfx::NativeView parent);
++  void Show(gfx::NativeView parent);
++  void Hide();
++  bool IsShowing() const;
++
++  base::WeakPtr<HeliumCommandBarController> GetWeakPtr();
++
++ private:
++  void OnWidgetClosed() { widget_ = nullptr; }
++
++  raw_ptr<BrowserWindowInterface> browser_;
++  // Owned by the widget itself (deleted on close); null when hidden.
++  raw_ptr<views::Widget> widget_ = nullptr;
++  ui::ScopedUnownedUserData<HeliumCommandBarController> scoped_unowned_user_data_;
++  base::WeakPtrFactory<HeliumCommandBarController> weak_factory_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_CONTROLLER_H_
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_command_bar_controller.cc
+@@ -0,0 +1,66 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/helium_command_bar_controller.h"
++
++#include "base/functional/bind.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/helium/helium_command_bar_view.h"
++#include "ui/views/widget/widget.h"
++
++DEFINE_USER_DATA(HeliumCommandBarController);
++
++// static
++HeliumCommandBarController* HeliumCommandBarController::From(
++    BrowserWindowInterface* browser) {
++  if (!browser) {
++    return nullptr;
++  }
++  return HeliumCommandBarController::Get(browser->GetUnownedUserDataHost());
++}
++
++HeliumCommandBarController::HeliumCommandBarController(
++    BrowserWindowInterface* browser)
++    : browser_(browser),
++      scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this) {}
++
++HeliumCommandBarController::~HeliumCommandBarController() = default;
++
++void HeliumCommandBarController::Toggle(gfx::NativeView parent) {
++  if (IsShowing()) {
++    Hide();
++  } else {
++    Show(parent);
++  }
++}
++
++void HeliumCommandBarController::Show(gfx::NativeView parent) {
++  if (widget_) {
++    widget_->Activate();
++    return;
++  }
++  widget_ = HeliumCommandBarView::Show(
++      parent, base::BindOnce(&HeliumCommandBarController::OnWidgetClosed,
++                             weak_factory_.GetWeakPtr()));
++}
++
++void HeliumCommandBarController::Hide() {
++  if (!widget_) {
++    return;
++  }
++  // Null first: closing runs WindowClosing synchronously, which would
++  // otherwise re-enter and double-close.
++  views::Widget* widget = widget_;
++  widget_ = nullptr;
++  widget->Close();
++}
++
++bool HeliumCommandBarController::IsShowing() const {
++  return widget_ != nullptr;
++}
++
++base::WeakPtr<HeliumCommandBarController>
++HeliumCommandBarController::GetWeakPtr() {
++  return weak_factory_.GetWeakPtr();
++}
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_command_bar_view.h
+@@ -0,0 +1,56 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_VIEW_H_
++#define CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_VIEW_H_
++
++#include "base/memory/raw_ptr.h"
++#include "base/functional/callback_forward.h"
++#include "base/memory/raw_ptr.h"
++#include "ui/views/controls/textfield/textfield_controller.h"
++#include "ui/views/widget/widget_delegate.h"
++
++namespace gfx {
++class Rect;
++}
++
++namespace views {
++class Textfield;
++class Widget;
++}  // namespace views
++
++// Floating command bar popup: a single text field with a results list below.
++// Skeleton: the field is live and closable; result rows arrive next.
++class HeliumCommandBarView : public views::WidgetDelegate,
++                             public views::TextfieldController {
++ public:
++  // Creates, shows and focuses the popup parented to |parent|. |on_closed|
++  // runs when the widget begins closing. Returns the owning widget
++  // (deleted on close).
++  static views::Widget* Show(gfx::NativeView parent,
++                               base::OnceClosure on_closed);
++
++  HeliumCommandBarView(const HeliumCommandBarView&) = delete;
++  HeliumCommandBarView& operator=(const HeliumCommandBarView&) = delete;
++  ~HeliumCommandBarView() override;
++
++  void Close();
++
++  // views::TextfieldController:
++  void ContentsChanged(views::Textfield* sender,
++                       const std::u16string& new_contents) override;
++  bool HandleKeyEvent(views::Textfield* sender,
++                      const ui::KeyEvent& event) override;
++
++ private:
++  explicit HeliumCommandBarView(gfx::NativeView parent,
++                                base::OnceClosure on_closed);
++
++  void WindowClosing() override;
++
++  base::OnceClosure on_closed_;
++  raw_ptr<views::Textfield> input_ = nullptr;
++};
++
++#endif  // CHROME_BROWSER_UI_HELIUM_HELIUM_COMMAND_BAR_VIEW_H_
+
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_command_bar_view.cc
+@@ -0,0 +1,99 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/helium_command_bar_view.h"
++
++#include <utility>
++
++#include "ui/events/event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/layout/box_layout.h"
++#include "ui/views/widget/widget.h"
++
++namespace {
++
++// Width matches Lumno's panel density; height fits the single input row for
++// now and grows with the results list later.
++constexpr int kBarWidth = 560;
++constexpr int kInputHeight = 40;
++constexpr int kVerticalPadding = 16;
++
++}  // namespace
++
++// static
++views::Widget* HeliumCommandBarView::Show(gfx::NativeView parent,
++                                          base::OnceClosure on_closed) {
++  auto delegate =
++      std::unique_ptr<HeliumCommandBarView>(new HeliumCommandBarView(
++          parent, std::move(on_closed)));
++  HeliumCommandBarView* view = delegate.get();
++  views::Widget* widget = new views::Widget;
++  views::Widget::InitParams params(
++      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
++      views::Widget::InitParams::TYPE_POPUP);
++  params.parent = parent;
++  params.delegate = delegate.release();
++  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
++  params.shadow_type = views::Widget::InitParams::ShadowType::kDrop;
++  params.activatable = views::Widget::InitParams::Activatable::kYes;
++  widget->Init(std::move(params));
++
++  // Hang the bar near the top of the browser window, Lumno-style.
++  const gfx::Rect parent_bounds =
++      views::Widget::GetWidgetForNativeView(parent)->GetWindowBoundsInScreen();
++  const int height = kInputHeight + kVerticalPadding;
++  widget->SetBounds(gfx::Rect(
++      parent_bounds.x() + (parent_bounds.width() - kBarWidth) / 2,
++      parent_bounds.y() + parent_bounds.height() / 5, kBarWidth, height));
++  widget->Show();
++  view->input_->RequestFocus();
++  return widget;
++}
++
++HeliumCommandBarView::HeliumCommandBarView(gfx::NativeView parent,
++                                           base::OnceClosure on_closed)
++    : on_closed_(std::move(on_closed)) {
++  SetModalType(ui::mojom::ModalType::kNone);
++  auto contents = std::make_unique<views::View>();
++  contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kVertical,
++      gfx::Insets::VH(kVerticalPadding / 2, 12), 0));
++  auto input = std::make_unique<views::Textfield>();
++  // TODO(command-bar): move to IDS_ strings with the results list.
++  input->SetPlaceholderText(u"Search or type a URL...");
++  input->SetPreferredSize(gfx::Size(kBarWidth, kInputHeight));
++  input->SetController(this);
++  input_ = input.get();
++  contents->AddChildView(std::move(input));
++  SetContentsView(std::move(contents));
++}
++
++HeliumCommandBarView::~HeliumCommandBarView() = default;
++
++void HeliumCommandBarView::Close() {
++  if (GetWidget()) {
++    GetWidget()->Close();
++  }
++}
++
++void HeliumCommandBarView::WindowClosing() {
++  std::move(on_closed_).Run();
++}
++
++void HeliumCommandBarView::ContentsChanged(
++    views::Textfield* sender,
++    const std::u16string& new_contents) {
++  // Result filtering arrives next; the live field is enough for the skeleton.
++}
++
++bool HeliumCommandBarView::HandleKeyEvent(views::Textfield* sender,
++                                          const ui::KeyEvent& event) {
++  if (event.key_code() == ui::VKEY_ESCAPE) {
++    Close();
++    return true;
++  }
++  return false;
++}
+
