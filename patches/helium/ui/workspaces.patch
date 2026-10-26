@@ -1000,10 +1000,11 @@
  #include "chrome/browser/ui/intent_picker_tab_helper.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/omnibox/omnibox_view.h"
-@@ -928,6 +930,30 @@
+@@ -927,6 +929,30 @@
+       prefs::kHeliumCenteredLocationBar, prefs,
        base::BindRepeating(&ToolbarView::OnLocationBarCenteredChanged,
                            base::Unretained(this)));
- 
++
 +  // Workspaces: put the dot row at the leading edge of the top bar. The row
 +  // scrolls horizontally, so it keeps a compact preferred width instead of
 +  // stretching across the whole bar.
@@ -1027,11 +1028,35 @@
 +    spacer->SetVisible(false);
 +    toolbar_spacer_ = AddChildViewAt(std::move(spacer), 1);
 +  }
-+
+ 
    InitLayout();
  
-   auto flex_preferred =
-@@ -2415,11 +2441,24 @@
+@@ -1557,11 +1583,24 @@
+   // element. False if on a clickable element, true if not on a clickable element.
+   for (views::View* const child : children()) {
+     if (!child->GetVisible()) {
++      continue;
++    }
++
++    // The spacer only absorbs slack; it must not turn the empty part of the
++    // top bar into a client area, or the window stops being draggable there.
++    if (child == toolbar_spacer_.get()) {
+       continue;
+     }
+ 
+     const gfx::Rect target_rect = get_target_rect(child);
+     if (child->GetLocalBounds().Intersects(target_rect)) {
++      // Workspace dots and the add button are clickable, but the rest of the
++      // row belongs to the caption so the top bar stays draggable.
++      if (child == workspace_switcher_.get() &&
++          !workspace_switcher_->IsPointInInteractiveArea(
++              target_rect.origin())) {
++        continue;
++      }
+       // Check if the rect is actually on the child.
+       if (child->HitTestRect(target_rect)) {
+         return false;
+@@ -2415,11 +2454,24 @@
                                               : views::kSidebarLeftIcon);
      }
  
@@ -3936,7 +3961,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.h
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,77 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -3979,6 +4004,11 @@
 +      delete;
 +  ~HeliumWorkspaceSwitcherView() override;
 +
++  // Returns true when |point| (in this view's coordinates) is over a dot, the
++  // add button, or the horizontal scrollbar. The rest of the row is part of
++  // the top bar's caption area, so the window stays draggable there.
++  bool IsPointInInteractiveArea(const gfx::Point& point) const;
++
 +  // views::View:
 +  gfx::Size CalculatePreferredSize(
 +      const views::SizeBounds& available_size) const override;
@@ -4012,7 +4042,7 @@
 
 --- /dev/null
 +++ b/chrome/browser/ui/helium/helium_workspace_switcher_view.cc
-@@ -0,0 +1,750 @@
+@@ -0,0 +1,774 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -4043,6 +4073,7 @@
 +#include "ui/base/l10n/l10n_util.h"
 +#include "ui/base/mojom/menu_source_type.mojom-shared.h"
 +#include "ui/color/color_id.h"
++#include "ui/events/event.h"
 +#include "ui/events/keycodes/keyboard_codes.h"
 +#include "ui/gfx/canvas.h"
 +#include "ui/gfx/geometry/point.h"
@@ -4069,15 +4100,12 @@
 +
 +// The row follows the vertical tab height so it lines up with the tab list in
 +// both the standard and comfortable densities. The painted dot is smaller than
-+// its hit area; the leftover vertical space is a drag strip for scrolling.
++// its hit area.
 +constexpr int kRowVerticalInset = 2;
 +constexpr int kDotHitSize = 24;
 +constexpr int kDotGap = 2;
 +constexpr int kDotRadius = 6;
 +constexpr int kDotRingWidth = 2;
-+// In the top bar the row shares space with the window controls and toolbar
-+// buttons, so cap its preferred width; anything beyond this scrolls.
-+constexpr int kMaxSwitcherWidth = 240;
 +
 +std::u16string TooltipFor(const std::string& name,
 +                          bool active,
@@ -4509,13 +4537,11 @@
 +};
 +
 +// The scrolling row itself. Dots handle their own clicks and drag-reorder;
-+// empty row space (including the gaps between dots) starts a click-and-drag
-+// horizontal scroll instead. The view is at least as wide as the viewport, so
-+// clicks in the empty part of a short row still land here and bubble up to the
-+// surrounding chrome.
++// the row is content-sized, so it only scrolls when the toolbar cannot give it
++// enough width. Empty row space is treated as window caption by ToolbarView.
 +class HeliumWorkspaceSwitcherView::ContentsView : public views::View {
 + public:
-+  explicit ContentsView(HeliumWorkspaceSwitcherView* owner) : owner_(owner) {
++  ContentsView() {
 +    auto* layout = static_cast<views::BoxLayout*>(SetLayoutManager(
 +        std::make_unique<views::BoxLayout>(
 +            views::BoxLayout::Orientation::kHorizontal,
@@ -4527,49 +4553,45 @@
 +    SetFocusBehavior(FocusBehavior::NEVER);
 +  }
 +  ~ContentsView() override = default;
-+
-+  // views::View:
-+  bool OnMousePressed(const ui::MouseEvent& event) override {
-+    if (!event.IsOnlyLeftMouseButton() || !owner_->scroll_view_ ||
-+        !owner_->scroll_view_->IsHorizontalContentOverflowing()) {
-+      // Nothing to scroll: let the surrounding chrome handle the drag.
-+      return false;
-+    }
-+    dragging_ = true;
-+    last_drag_x_ = event.x();
-+    return true;
-+  }
-+  bool OnMouseDragged(const ui::MouseEvent& event) override {
-+    if (!dragging_ || !event.IsOnlyLeftMouseButton()) {
-+      return false;
-+    }
-+    const int delta = event.x() - last_drag_x_;
-+    last_drag_x_ = event.x();
-+    if (delta != 0 && owner_->scroll_view_) {
-+      // Dragging the row left reveals later dots.
-+      owner_->scroll_view_->ScrollByOffset(gfx::PointF(-delta, 0));
-+    }
-+    return true;
-+  }
-+  void OnMouseReleased(const ui::MouseEvent& event) override {
-+    if (event.IsOnlyLeftMouseButton()) {
-+      dragging_ = false;
-+    }
-+  }
-+
-+ private:
-+  raw_ptr<HeliumWorkspaceSwitcherView> owner_;
-+  int last_drag_x_ = 0;
-+  bool dragging_ = false;
 +};
++
++namespace {
++
++// Only consume wheel/trackpad scrolls when the row actually overflows. A short
++// row leaves the gesture alone, so the top bar does not steal page scrolling.
++class WorkspaceScrollView : public views::ScrollView {
++  METADATA_HEADER(WorkspaceScrollView, views::ScrollView)
++
++ public:
++  WorkspaceScrollView() : views::ScrollView(ScrollWithLayers::kEnabled) {}
++  ~WorkspaceScrollView() override = default;
++
++  // views::ScrollView:
++  bool OnMouseWheel(const ui::MouseWheelEvent& event) override {
++    if (!IsHorizontalContentOverflowing()) {
++      return false;
++    }
++    return views::ScrollView::OnMouseWheel(event);
++  }
++  void OnScrollEvent(ui::ScrollEvent* event) override {
++    if (!IsHorizontalContentOverflowing()) {
++      return;
++    }
++    views::ScrollView::OnScrollEvent(event);
++  }
++};
++
++BEGIN_METADATA(WorkspaceScrollView)
++END_METADATA
++
++}  // namespace
 +
 +HeliumWorkspaceSwitcherView::HeliumWorkspaceSwitcherView(
 +    BrowserWindowInterface* browser)
 +    : browser_(browser) {
 +  SetLayoutManager(std::make_unique<views::FillLayout>());
 +
-+  auto scroll_view = std::make_unique<views::ScrollView>(
-+      views::ScrollView::ScrollWithLayers::kEnabled);
++  auto scroll_view = std::make_unique<WorkspaceScrollView>();
 +  // No opaque background: the native frame material must show through.
 +  scroll_view->SetBackgroundColor(std::nullopt);
 +  scroll_view->SetVerticalScrollBarMode(
@@ -4597,7 +4619,7 @@
 +      },
 +      base::Unretained(this)));
 +  contents_view_ =
-+      scroll_view->SetContents(std::make_unique<ContentsView>(this));
++      scroll_view->SetContents(std::make_unique<ContentsView>());
 +  scroll_view_ = AddChildView(std::move(scroll_view));
 +
 +  HeliumWorkspaceController* controller =
@@ -4628,8 +4650,10 @@
 +          kDotGap * (static_cast<int>(children.size()) - 1);
 +    }
 +  }
-+  const int width =
-+      std::clamp(content_width, kDotHitSize, kMaxSwitcherWidth);
++  // Content-sized: the toolbar gives the row whatever width it can spare, and
++  // only shrinks it below this (and therefore scrolls) when the trailing
++  // controls need the space.
++  const int width = std::max(content_width, kDotHitSize);
 +  return gfx::Size(width, row_height);
 +}
 +
@@ -4638,6 +4662,36 @@
 +  // of the row stays available by scrolling.
 +  return gfx::Size(kDotHitSize,
 +                   GetLayoutConstant(LayoutConstant::kVerticalTabHeight));
++}
++
++bool HeliumWorkspaceSwitcherView::IsPointInInteractiveArea(
++    const gfx::Point& point) const {
++  if (!GetVisible()) {
++    return false;
++  }
++  if (contents_view_) {
++    for (views::View* child : contents_view_->children()) {
++      if (!child->GetVisible()) {
++        continue;
++      }
++      gfx::Point child_point = point;
++      views::View::ConvertPointToTarget(this, child, &child_point);
++      if (child->HitTestPoint(child_point)) {
++        return true;
++      }
++    }
++  }
++  if (scroll_view_) {
++    views::ScrollBar* bar = scroll_view_->horizontal_scroll_bar();
++    if (bar && bar->GetVisible()) {
++      gfx::Point bar_point = point;
++      views::View::ConvertPointToTarget(this, bar, &bar_point);
++      if (bar->HitTestPoint(bar_point)) {
++        return true;
++      }
++    }
++  }
++  return false;
 +}
 +
 +void HeliumWorkspaceSwitcherView::Refresh() {

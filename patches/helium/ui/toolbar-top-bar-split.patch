@@ -72,13 +72,13 @@
    const int horizontal_padding =
        GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
  
-+  // Keep the gap above the navigation row tight against the top bar. The
-+  // top bar already supplies its own padding below the window controls, so a
-+  // larger margin here reads as dead space. Only affects sidebar-address-bar
-+  // mode: the header is hidden (and its margins collapse) otherwise.
++  // Slim top margin so the gap above the navigation row matches the thin
++  // margin at the bottom of the sidebar, with a little room to breathe.
++  // Only affects sidebar-address-bar mode: the header is hidden (and its
++  // margins collapse) otherwise.
    SetProperty(views::kMarginsKey,
 -              gfx::Insets::TLBR(4, horizontal_padding, 4, horizontal_padding));
-+              gfx::Insets::TLBR(2, horizontal_padding, 4, horizontal_padding));
++              gfx::Insets::TLBR(5, horizontal_padding, 4, horizontal_padding));
    SetProperty(views::kFlexBehaviorKey,
                views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
                                         views::MaximumFlexSizeRule::kPreferred));
