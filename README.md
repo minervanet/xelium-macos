@@ -17,6 +17,11 @@
 | <img src="docs/visual-tab-switcher.png" alt="Xelium visual tab switcher" width="100%"> | <img src="docs/address-bar-sidebar.png" alt="Xelium address bar in the sidebar with comfortable interface size" width="100%"> |
 | *Visual tab switcher* | *Address bar in the sidebar, comfortable density* |
 
+> [!NOTE]
+> **Experimental, unreleased:** workspaces (dots row with quick switching) live on `experimental/workspaces` and are not in any release yet.
+>
+> <img src="docs/workspaces.png" alt="Xelium workspaces preview" width="100%">
+
 ## Download
 
 [Latest release](https://github.com/minervanet/xelium-macos/releases/latest) for macOS 13+ on Apple silicon.
