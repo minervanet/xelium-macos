@@ -9,13 +9,13 @@
     <language>en</language>
     <item>
       <title>Xelium 0.20.1.1</title>
-      <pubDate>Mon, 26 Oct 2026 20:29:50 +0000</pubDate>
-      <sparkle:version>202610270322</sparkle:version>
+      <pubDate>Tue, 27 Oct 2026 00:20:21 +0000</pubDate>
+      <sparkle:version>202610270715</sparkle:version>
       <sparkle:shortVersionString>0.20.1.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
       <enclosure url="https://github.com/minervanet/xelium-macos/releases/download/v0.20.1.1/Xelium-0.20.1.1-arm64.dmg"
-                 sparkle:edSignature="1t5fjLwSM2itJsb/gVHANFcwPdfWN6b/rBceVKjbuASYWwAlK9iRpb/jPj4UJVDjZjtacqJXhhtpwwFkmhLTAA=="
-                 length="108795748"
+                 sparkle:edSignature="cPnyAsO5pA46e9nNsl1caQm/A0Lten3VCQpPvKOVdmwATRSYoQfuIkybnYnjtowDO+o4QGyPRKTUJH+mwLeHCA=="
+                 length="108801708"
                  type="application/octet-stream" />
     </item>
   </channel>
