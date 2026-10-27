@@ -9,7 +9,10 @@
 </div>
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Xelium with the native command bar open" width="100%">
+  <img src="docs/floating-url-bar.png" alt="Xelium with the native command bar open" width="100%">
+  <img src="docs/link-peek.png" alt="Xelium link peek preview" width="100%">
+  <img src="docs/visual-tab-switcher.png" alt="Xelium visual tab switcher" width="100%">
+  <img src="docs/address-bar-sidebar.png" alt="Xelium address bar in the sidebar with comfortable interface size" width="100%">
 </p>
 
 ## Download
