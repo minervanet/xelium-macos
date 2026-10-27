@@ -20,7 +20,7 @@
 > [!NOTE]
 > **Experimental, unreleased:** workspaces (dots row with quick switching) live on `experimental/workspaces` and are not in any release yet.
 >
-> <img src="docs/workspaces.png" alt="Xelium workspaces preview" width="100%">
+> <img src="docs/workspaces.png" alt="Xelium workspaces preview" width="360">
 
 ## Download
 
