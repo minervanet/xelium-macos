@@ -349,17 +349,16 @@
    [NSApp activateIgnoringOtherApps:YES];
 --- a/chrome/app/generated_resources.grd
 +++ b/chrome/app/generated_resources.grd
-@@ -15819,6 +15819,12 @@
-         <!-- App menu -->
+@@ -16273,5 +16273,11 @@
          <message name="IDS_ABOUT_MAC" desc="In Title Case: The Mac menu item to open the about box.">
-           About <ph name="PRODUCT_NAME">$1<ex>Helium</ex></ph>
-+        </message>
+           About <ph name="PRODUCT_NAME">$1<ex>Google Chrome</ex></ph>
+         </message>
 +        <message name="IDS_CHECK_FOR_UPDATES_MAC" desc="In Title Case: The Mac menu item to check for updates.">
 +          Check for Updates...
 +        </message>
 +        <message name="IDS_AUTOMATICALLY_CHECK_FOR_UPDATES_MAC" desc="In Title Case: The Mac menu item to toggle automatic update checks.">
 +          Automatically Check for Updates
-         </message>
++        </message>
          <message name="IDS_CLEAR_BROWSING_DATA_MAC" desc="In Title Case: The Mac menu item for clearing browsing data.">
            Delete Browsing Data...
 --- a/chrome/installer/mac/signing/chromium_config.py

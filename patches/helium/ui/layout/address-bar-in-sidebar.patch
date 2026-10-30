@@ -1689,30 +1689,6 @@
  void ExtensionsToolbarDesktop::UpdateAllIcons() {
    UpdateControlsVisibility();
  
-@@ -590,17 +599,17 @@
-   // Fix the position of widgets. Without this fix, extension-installed-bubble
-   // and extension-uninstall-dialog may be out of the window border on Linux.
-   const bool hide_pref = !browser_->GetProfile()->GetPrefs()->GetBoolean(
--        prefs::kShowExtensionsButton);
--  const bool hide_cmd = base::CommandLine::ForCurrentProcess()->HasSwitch(
--        "hide-extensions-menu");
-+      prefs::kShowExtensionsButton);
-+  const bool hide_cmd =
-+      base::CommandLine::ForCurrentProcess()->HasSwitch("hide-extensions-menu");
-   if (hide_pref || hide_cmd) {
--    views::View* anchor_view =
-+    views::View* app_menu_anchor =
-         views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
-             kToolbarAppMenuButtonElementId,
-             views::ElementTrackerViews::GetContextForView(
-                 BrowserView::GetBrowserViewForBrowser(browser_)));
--    widget->widget_delegate()->AsBubbleDialogDelegate()
--      ->SetAnchorView(anchor_view);
-+    widget->widget_delegate()->AsBubbleDialogDelegate()->SetAnchorView(
-+        app_menu_anchor);
-   }
- 
-   widget->Show();
 @@ -686,6 +695,15 @@
      // `close_side_panel_button_` exists, or second to last otherwise.
      ReorderChildView(request_access_button_, button_index);
