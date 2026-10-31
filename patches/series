@@ -48,3 +48,4 @@ helium/ui/xelium-report-on-github.patch
 z-xelium-sparkle-updates.patch
 helium/ui/floating-url-bar.patch
 helium/ui/link-peek.patch
+z-xelium-signing-no-pre-notarize-spctl.patch

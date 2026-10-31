@@ -1,0 +1,17 @@
+--- a/chrome/installer/mac/signing/config.py
++++ b/chrome/installer/mac/signing/config.py
+@@ -189,7 +189,12 @@
+     @property
+     def run_spctl_assess(self):
+         """Returns whether the final code signed binary should be assessed by
+         Gatekeeper after signing.
+         """
+-        return True
++        # Xelium: skip the pre-notarization assessment. On macOS 26+,
++        # Gatekeeper rejects valid Developer ID signatures without a
++        # notarization ticket ("Unnotarized Developer ID"), and notarization
++        # runs after this gate in the pipeline. Assessment still happens
++        # post-staple in sign_and_package_app.sh, where the ticket exists.
++        return False
+ 
+     @property
